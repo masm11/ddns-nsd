@@ -55,13 +55,13 @@ class Request
     
     def read(data, i)
       puts "Zone:------------------------------"
-      zname, i = read_domainname(data, i)
-      puts "ZNAME='#{zname}'"
+      @name, i = read_domainname(data, i)
+      puts "ZNAME='#{@name}'"
       
-      ztype, i = read_2(data, i)
-      zclass, i = read_2(data, i)
-      puts "ZTYPE=#{ztype}"   # must be SOA.
-      puts "ZCLASS=#{zclass}" # zone's class.
+      @type, i = read_2(data, i)
+      @class, i = read_2(data, i)
+      puts "ZTYPE=#{@type}"   # must be SOA.
+      puts "ZCLASS=#{@class}" # zone's class.
       
       dump(data, i, data.length - i)
       i
@@ -73,21 +73,21 @@ class Request
     
     def read(data, i)
       puts "Prereq:------------------------------"
-      rrname, i = read_domainname(data, i)
+      @name, i = read_domainname(data, i)
       
-      rrtype, i = read_2(data, i)
-      rrclass, i = read_2(data, i)
-      rrttl, i = read_4(data, i)
-      rrrdlength, i = read_2(data, i)
-      rrrdata = data[i ... i + rrrdlength]
-      i += rrrdlength
+      @type, i = read_2(data, i)
+      @class, i = read_2(data, i)
+      @ttl, i = read_4(data, i)
+      rdlength, i = read_2(data, i)
+      @rdata = data[i ... i + rdlength]
+      i += rdlength
       
-      puts "RR name=#{rrname}"
-      puts "RR type=#{rrtype}"
-      puts "RR class=#{rrclass}"
-      puts "RR ttl=#{rrttl}"
-      puts "RR rdlength=#{rrrdlength}"
-      puts "RR rdata=#{rrrdata}"
+      puts "RR name=#{@name}"
+      puts "RR type=#{@type}"
+      puts "RR class=#{@class}"
+      puts "RR ttl=#{@ttl}"
+      puts "RR rdlength=#{rdlength}"
+      puts "RR rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -99,21 +99,21 @@ class Request
     
     def read(data, i)
       puts "Update:------------------------------"
-      rrname, i = read_domainname(data, i)
+      @name, i = read_domainname(data, i)
       
-      rrtype, i = read_2(data, i)
-      rrclass, i = read_2(data, i)
-      rrttl, i = read_4(data, i)
-      rrrdlength, i = read_2(data, i)
-      rrrdata = data[i...i + rrrdlength]
-      i += rrrdlength
+      @type, i = read_2(data, i)
+      @class, i = read_2(data, i)
+      @ttl, i = read_4(data, i)
+      rdlength, i = read_2(data, i)
+      @rdata = data[i...i + rdlength]
+      i += rdlength
       
-      puts "RR name=#{rrname}"
-      puts "RR type=#{rrtype}"
-      puts "RR class=#{rrclass}"
-      puts "RR ttl=#{rrttl}"
-      puts "RR rdlength=#{rrrdlength}"
-      puts "RR rdata=#{rrrdata}"
+      puts "RR name=#{@name}"
+      puts "RR type=#{@type}"
+      puts "RR class=#{@class}"
+      puts "RR ttl=#{@ttl}"
+      puts "RR rdlength=#{rdlength}"
+      puts "RR rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -125,21 +125,21 @@ class Request
     
     def read(data, i)
       puts "Additional:------------------------------"
-      rrname, i = read_domainname(data, i)
+      @name, i = read_domainname(data, i)
       
-      rrtype, i = read_2(data, i)
-      rrclass, i = read_2(data, i)
-      rrttl, i = read_4(data, i)
-      rrrdlength, i = read_2(data, i)
-      rrrdata = data[i...i + rrrdlength]
-      i += rrrdlength
+      @type, i = read_2(data, i)
+      @class, i = read_2(data, i)
+      @ttl, i = read_4(data, i)
+      rdlength, i = read_2(data, i)
+      @rdata = data[i...i + rdlength]
+      i += rdlength
       
-      puts "RR name=#{rrname}"
-      puts "RR type=#{rrtype}"
-      puts "RR class=#{rrclass}"
-      puts "RR ttl=#{rrttl}"
-      puts "RR rdlength=#{rrrdlength}"
-      puts "RR rdata=#{rrrdata}"
+      puts "RR name=#{@name}"
+      puts "RR type=#{@type}"
+      puts "RR class=#{@class}"
+      puts "RR ttl=#{@ttl}"
+      puts "RR rdlength=#{rdlength}"
+      puts "RR rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
