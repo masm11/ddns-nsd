@@ -22,12 +22,15 @@ module Base
   TYPE_MINFO = 14
   TYPE_MX    = 15
   TYPE_TXT   = 16
+  TYPE_NONE  = 254
+  TYPE_ANY   = 255
   
   CLASS_IN   = 1
   CLASS_CS   = 2
   CLASS_CH   = 3
   CLASS_HS   = 4
   CLASS_NONE = 254
+  CLASS_ANY  = 255
   
   RCODE_NOERROR  = 0
   RCODE_FORMERR  = 1
