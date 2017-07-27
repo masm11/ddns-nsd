@@ -3,6 +3,44 @@
 require 'socket'
 
 module Base
+  
+  OPCODE_UPDATE = 5
+  
+  TYPE_A     = 1
+  TYPE_NS    = 2
+  TYPE_MD    = 3
+  TYPE_MF    = 4
+  TYPE_CNAME = 5
+  TYPE_SOA   = 6
+  TYPE_MB    = 7
+  TYPE_MG    = 8
+  TYPE_MR    = 9
+  TYPE_NULL  = 10
+  TYPE_WKS   = 11
+  TYPE_PTR   = 12
+  TYPE_HINFO = 13
+  TYPE_MINFO = 14
+  TYPE_MX    = 15
+  TYPE_TXT   = 16
+  
+  CLASS_IN   = 1
+  CLASS_CS   = 2
+  CLASS_CH   = 3
+  CLASS_HS   = 4
+  CLASS_NONE = 254
+  
+  RCODE_NOERROR  = 0
+  RCODE_FORMERR  = 1
+  RCODE_SERVFAIL = 2
+  RCODE_NXDOMAIN = 3
+  RCODE_NOTIMP   = 4
+  RCODE_REFUSED  = 5
+  RCODE_YXDOMAIN = 6
+  RCODE_YXRRSET  = 7
+  RCODE_NXRRSET  = 8
+  RCODE_NOTAUTH  = 9
+  RCODE_NOTZONE  = 10
+  
   def dump(ary, beg, len)
     print "---------------------------------\n"
     print "[i=0x#{'%x' % beg}, len=#{len}]\n"
@@ -53,6 +91,10 @@ class Request
   class Zone
     include Base
     
+    attr_reader :name
+    attr_reader :type
+    attr_reader :class
+    
     def read(data, i)
       puts "Zone:------------------------------"
       @name, i = read_domainname(data, i)
@@ -70,6 +112,20 @@ class Request
   
   class Prerequisite
     include Base
+    
+    # CLASS    TYPE     RDATA    Meaning
+    # ------------------------------------------------------------
+    # ANY      ANY      empty    Name is in use
+    # ANY      rrset    empty    RRset exists (value independent)
+    # NONE     ANY      empty    Name is not in use
+    # NONE     rrset    empty    RRset does not exist
+    # zone     rrset    rr       RRset exists (value dependent)
+
+    attr_reader :name
+    attr_reader :type
+    attr_reader :class
+    attr_reader :ttl
+    attr_reader :rdata
     
     def read(data, i)
       puts "Prereq:------------------------------"
@@ -97,6 +153,19 @@ class Request
   class Update
     include Base
     
+    # CLASS    TYPE     RDATA    Meaning
+    # ---------------------------------------------------------
+    # ANY      ANY      empty    Delete all RRsets from a name
+    # ANY      rrset    empty    Delete an RRset
+    # NONE     rrset    rr       Delete an RR from an RRset
+    # zone     rrset    rr       Add to an RRset
+    
+    attr_reader :name
+    attr_reader :type
+    attr_reader :class
+    attr_reader :ttl
+    attr_reader :rdata
+    
     def read(data, i)
       puts "Update:------------------------------"
       @name, i = read_domainname(data, i)
@@ -123,6 +192,12 @@ class Request
   class Additional
     include Base
     
+    attr_reader :name
+    attr_reader :type
+    attr_reader :class
+    attr_reader :ttl
+    attr_reader :rdata
+    
     def read(data, i)
       puts "Additional:------------------------------"
       @name, i = read_domainname(data, i)
@@ -145,6 +220,16 @@ class Request
       i
     end
   end
+  
+  attr_reader :id
+  attr_reader :qr
+  attr_reader :opcode
+  attr_reader :z
+  attr_reader :rcode
+  attr_reader :zones
+  attr_reader :prerequisites
+  attr_reader :updates
+  attr_reader :additionals
   
   def initialize(data)
     i = 0
