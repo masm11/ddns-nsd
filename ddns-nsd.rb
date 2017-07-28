@@ -2,6 +2,21 @@
 
 require 'socket'
 
+@data = [
+  {
+    name: 'pink.masm11.ddo.jp.',
+    records: [],
+  },
+]
+
+class Ex < StandardError
+  attr_reader :code
+  def initialize(code, msg)
+    super(msg)
+    @code = code
+  end
+end
+
 module Base
   
   OPCODE_UPDATE = 5
@@ -362,7 +377,95 @@ def try_udp
     data = sock.recv(65536).unpack('C*')   # ASCII-8BIT
     puts 'UDP:'
     
-    req = Request.new(data)
+    begin
+      req = Request.new(data)
+      
+      # check zone.
+      
+      if req.zones.length != 1
+        raise new Ex(Request::RCODE_FORMERR, 'zone count is not 1.')
+      end
+      if req.zones[0].type != Request::TYPE_SOA
+        raise new Ex(Request::RCODE_FORMERR, 'zone is not SOA.')
+      end
+      data = @data.select{ |dat| req.zones[0].name == dat[:name] }.first
+      unless data
+        raise new Ex(Request::RCODE_NOTAUTH, 'unknown zone name.')
+      end
+      
+      # check prerequisites.
+      
+      req.prerequisites.each do |prereq|
+        if prereq.class == Request::CLASS_ANY
+          unless prereq.ttl == 0 && prereq.rdata.length == 0
+            raise new Ex(Request::RCODE_FORMERR, 'bad prereq 1.')
+          end
+          if prereq.type == Request::TYPE_ANY
+            if data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
+              raise new Ex(Request::RCODE_NXDOMAIN, 'prereq: 2.')
+            end
+          else
+            if data[:records].select{ |rr|
+                 rr[:name] == prereq.name && rr[:type] == prereq.type
+               }.length == 0
+              raise new Ex(Request::RCODE_NXRRSET, 'prereq: 3.')
+            end
+          end
+        end
+      end
+      
+      req.prerequisites.each do |prereq|
+        if prereq.class == Request::CLASS_NONE
+          unless prereq.ttl == 0 && prereq.rdata.length == 0
+            raise new Ex(Request::RCODE_FORMERR, 'bad prereq 4.')
+          end
+          
+          if prereq.type == Request::TYPE_ANY
+            if data[:records].select{ |rr| rr[:name] == prereq.name }.length != 0
+              raise new Ex(Request::RCODE_YXDOMAIN, 'prereq: 2.')
+            end
+          else
+            if data[:records].select{ |rr|
+                 rr[:name] == prereq.name && rr[:type] == prereq.type
+               }.length != 0
+              raise new Ex(Request::RCODE_YXRRSET, 'prereq: 3.')
+            end
+          end
+        end
+      end
+      
+      rrset = []
+      req.prerequisites.each do |prereq|
+        if prereq.class == req.zones[0].class
+          unless prereq.ttl == 0
+            raise new Ex(Request::RCODE_FORMERR, 'prereq: 4.')
+          end
+          r = [ prereq.name, prereq.type ]
+          unless data[:records].include?(r)
+            raise new Ex(Request::RCODE_NXRRSET, 'prereq: 5.')
+          end
+          rrset << r unless rrset.include?(r)
+        end
+      end
+      if data[:records].length != rrset.length
+        raise new Ex(Request::RCODE_NXRRSET, 'prereq: 6.')
+      end
+      
+      req.prerequisites.each do |prereq|
+        if prereq.class == req.zones[0].class
+          unless [ req.zones[0].class, Request::CLASS_NONE, Request::CLASS_ANY ].include?(prereq.class)
+            raise new Ex(Request::RCODE_FORMERR, 'prereq: 7.')
+          end
+        end
+      end
+      
+      puts "OK."
+      
+    rescue => e
+      puts e.to_s
+      puts e.backtrace
+    end
+    
   end
 end
 
