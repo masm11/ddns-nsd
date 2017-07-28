@@ -128,6 +128,12 @@ class Request
     attr_reader :type
     attr_reader :class
     
+    def self.create(data, i)
+      zone = Zone.new
+      i = zone.read(data, i)
+      [ zone, i ]
+    end
+    
     def read(data, i)
       puts "Zone:------------------------------"
       @name, i = read_domainname(data, i)
@@ -159,6 +165,12 @@ class Request
     attr_reader :class
     attr_reader :ttl
     attr_reader :rdata
+    
+    def self.create(data, i)
+      prereq = Prerequisite.new
+      i = prereq.read(data, i)
+      [ prereq, i ]
+    end
     
     def read(data, i)
       puts "Prereq:------------------------------"
@@ -199,6 +211,12 @@ class Request
     attr_reader :ttl
     attr_reader :rdata
     
+    def self.create(data, i)
+      update = Update.new
+      i = update.read(data, i)
+      [ update, i ]
+    end
+    
     def read(data, i)
       puts "Update:------------------------------"
       @name, i = read_domainname(data, i)
@@ -230,6 +248,12 @@ class Request
     attr_reader :class
     attr_reader :ttl
     attr_reader :rdata
+    
+    def self.create(data, i)
+      additional = Additional.new
+      i = additional.read(data, i)
+      [ additional, i ]
+    end
     
     def read(data, i)
       puts "Additional:------------------------------"
@@ -290,31 +314,26 @@ class Request
     puts "ADCOUNT=#{adcount} (#additional)"
     
     @zones = []
-    i = 12
     zocount.times do
-      zone = Zone.new
-      i = zone.read(data, i)
+      zone, i = Zone.create(data, i)
       @zones << zone
     end
     
     @prerequisites = []
     prcount.times do
-      pr = Prerequisite.new
-      i = pr.read(data, i)
+      pr, i = Prerequisite.create(data, i)
       @prerequisites << pr
     end
     
     @updates = []
     upcount.times do
-      update = Update.new
-      i = update.read(data, i)
+      update, i = Update.create(data, i)
       @updates << update
     end
     
     @additionals = []
     adcount.times do
-      additional = Additional.new
-      i = additional.read(data, i)
+      additional, i = Additional.create(data, i)
       @additionals << additional
     end
   end
