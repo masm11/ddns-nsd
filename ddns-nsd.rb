@@ -412,6 +412,111 @@ class TSIG
   end
 end
 
+def check_tsig(req, data)
+  if req.additionals.length >= 1
+    if req.additionals.last.type == Request::TYPE_TSIG
+      puts "last additional rr is tsig."
+      
+      unless req.additionals.select{ |rr| rr.type == Request::TYPE_TSIG }.length == 1
+        # TSIG RR が複数あるらしい
+        raise Ex.new(Request::RCODE_FORMERR, 'multiple TSIG.')
+      end
+      
+      tsig = TSIG.new(req.additionals.last.rdata)
+      now = Time.now.to_i
+      unless now >= tsig.time && now < tsig.time + tsig.fudge
+        raise Ex.new(Request::RCODE_NOTAUTH, 'tsig badtime.')
+      end
+      
+      raw = data[0 ... req.additionals.last.start_pos]
+      if raw[11] != 0
+        raw[11] -= 1
+      else
+        raw[10] -= 1
+        raw[11] = 255
+      end
+      raw = raw.pack('C*')
+      key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
+      hmac = OpenSSL::HMAC.new(key, 'md5')
+      hmac.update(raw)
+      hmac.update(req.additionals.last.name.split('.').map{ |p|
+                    [p.length].pack('C') + p
+                  }.join('') + "\0")
+      hmac.update([req.additionals.last.class].pack('n'))
+      hmac.update([0].pack('N'))
+      hmac.update(tsig.alg.split('.').map{ |p|
+                    [p.length].pack('C') + p
+                  }.join('') + "\0")
+      hmac.update([tsig.time >> 32].pack('n'))
+      hmac.update([tsig.time].pack('N'))
+      hmac.update([tsig.fudge].pack('n'))
+      hmac.update([tsig.error].pack('n'))
+      hmac.update([tsig.other.length].pack('n'))
+      hmac.update(tsig.other.pack('C*'))
+      
+      puts "#{hmac.digest.unpack('C*')}"
+      puts "#{tsig.mac}"
+      unless hmac.digest == tsig.mac.pack('C*')
+        raise Ex.new(Request::RCODE_NOTAUTH, 'TSIG: bad sig.')
+      end
+      
+      tsig
+    end
+  end
+end
+
+def sign_tsig(res, req, tsig)
+  now = Time.now.to_i
+  key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
+  hmac = OpenSSL::HMAC.new(key, 'md5')
+  hmac.update(res.pack('C*'))
+  hmac.update('dhcp_updater'.split('.').map{ |p|
+                [p.length].pack('C') + p
+              }.join('') + "\0")
+  hmac.update([Request::CLASS_ANY].pack('n'))
+  hmac.update([0].pack('N'))
+  hmac.update('hmac-md5.sig-alg.reg.int'.split('.').map{ |p|
+                [p.length].pack('C') + p
+              }.join('') + "\0")
+  hmac.update([now >> 32].pack('n'))
+  hmac.update([now].pack('N'))
+  hmac.update([300].pack('n'))
+  hmac.update([0].pack('n'))
+  hmac.update([0].pack('n'))
+  hmac.update([tsig.mac.length].pack('n'))
+  hmac.update(tsig.mac.pack('C*'))
+  digest = hmac.digest
+  
+  rdata = [
+    "\x08hmac-md5\x07sig-alg\x03reg\x03int\x00",
+    [now >> 32].pack('n'),
+    [now].pack('N'),
+    [300].pack('n'),
+    [digest.length].pack('n'),
+    digest,
+    [req.id].pack('n'),
+    [0].pack('n'),
+    [0].pack('n'),
+  ].join('')
+  
+  if res[11] == 0xff
+    res[10] += 1
+    res[11] = 0
+  else
+    res[11] += 1
+  end
+  
+  [
+    res.pack('C*'),
+    "\x0cdhcp_updater\x00",
+    [Request::TYPE_TSIG].pack('n'),
+    [Request::CLASS_ANY].pack('n'),
+    [0].pack('N'),
+    [rdata.length].pack('n'),
+    rdata,
+  ].join('')
+end
+
 def try_tcp
   sock = TCPServer.open('127.0.0.2', 53)
   
@@ -440,55 +545,7 @@ def try_udp
       req = Request.new(data)
       
       # check TSIG.
-      
-      if req.additionals.length >= 1
-        if req.additionals.last.type == Request::TYPE_TSIG
-          puts "last additional rr is tsig."
-          
-          unless req.additionals.select{ |rr| rr.type == Request::TYPE_TSIG }.length == 1
-            # TSIG RR が複数あるらしい
-            raise Ex.new(Request::RCODE_FORMERR, 'multiple TSIG.')
-          end
-          
-          tsig = TSIG.new(req.additionals.last.rdata)
-          now = Time.now.to_i
-          unless now >= tsig.time && now < tsig.time + tsig.fudge
-            raise Ex.new(Request::RCODE_NOTAUTH, 'tsig badtime.')
-          end
-          
-          raw = data[0 ... req.additionals.last.start_pos]
-          if raw[11] != 0
-            raw[11] -= 1
-          else
-            raw[10] -= 1
-            raw[11] = 255
-          end
-          raw = raw.pack('C*')
-          key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
-          hmac = OpenSSL::HMAC.new(key, 'md5')
-          hmac.update(raw)
-          hmac.update(req.additionals.last.name.split('.').map{ |p|
-                        [p.length].pack('C') + p
-                      }.join('') + "\0")
-          hmac.update([req.additionals.last.class].pack('n'))
-          hmac.update([0].pack('N'))
-          hmac.update(tsig.alg.split('.').map{ |p|
-                        [p.length].pack('C') + p
-                      }.join('') + "\0")
-          hmac.update([tsig.time >> 32].pack('n'))
-          hmac.update([tsig.time].pack('N'))
-          hmac.update([tsig.fudge].pack('n'))
-          hmac.update([tsig.error].pack('n'))
-          hmac.update([tsig.other.length].pack('n'))
-          hmac.update(tsig.other.pack('C*'))
-          
-          puts "#{hmac.digest.unpack('C*')}"
-          puts "#{tsig.mac}"
-          unless hmac.digest == tsig.mac.pack('C*')
-            raise Ex.new(Request::RCODE_NOTAUTH, 'TSIG: bad sig.')
-          end
-        end
-      end
+      tsig = check_tsig(req, data)
       
       # check zone.
       
@@ -644,7 +701,7 @@ def try_udp
         0, 0,
         0, 0,
       ]
-      res = res.pack('C*')
+      res = sign_tsig(res, req, tsig)
       # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
       sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
       sock.send(res, 0, sa)
