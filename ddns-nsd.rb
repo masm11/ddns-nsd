@@ -466,40 +466,27 @@ def try_udp
           raw = raw.pack('C*')
           key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
           hmac = OpenSSL::HMAC.new(key, 'md5')
-          puts '--------'
-          p raw
           hmac.update(raw)
-          p req.additionals.last.name.split('.').map{ |p|
-            [p.length].pack('C') + p
-          }.join('') + "\0"
           hmac.update(req.additionals.last.name.split('.').map{ |p|
                         [p.length].pack('C') + p
                       }.join('') + "\0")
-          p [req.additionals.last.class].pack('n')
           hmac.update([req.additionals.last.class].pack('n'))
-          p [0].pack('n')
-          hmac.update([0].pack('n'))
-          p tsig.alg.split('.').map{ |p|
-            [p.length].pack('C') + p
-          }.join('') + "\0"
+          hmac.update([0].pack('N'))
           hmac.update(tsig.alg.split('.').map{ |p|
                         [p.length].pack('C') + p
                       }.join('') + "\0")
-          p [tsig.time >> 32].pack('n')
           hmac.update([tsig.time >> 32].pack('n'))
-          p [tsig.time].pack('N')
           hmac.update([tsig.time].pack('N'))
-          p [tsig.fudge].pack('n')
           hmac.update([tsig.fudge].pack('n'))
-          p [tsig.error].pack('n')
           hmac.update([tsig.error].pack('n'))
-          p [tsig.other.length].pack('n')
           hmac.update([tsig.other.length].pack('n'))
-          p tsig.other.pack('C*')
           hmac.update(tsig.other.pack('C*'))
-          puts '--------'
+          
           puts "#{hmac.digest.unpack('C*')}"
           puts "#{tsig.mac}"
+          unless hmac.digest == tsig.mac.pack('C*')
+            raise Ex.new(Request::RCODE_NOTAUTH, 'TSIG: bad sig.')
+          end
         end
       end
       
