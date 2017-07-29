@@ -48,6 +48,7 @@ module Base
   TYPE_KX         = 36
   TYPE_CERT       = 37
   TYPE_DNAME      = 39
+  TYPE_OPT        = 41
   TYPE_APL        = 42
   TYPE_DS         = 43
   TYPE_SSHFP      = 44
@@ -64,6 +65,8 @@ module Base
   TYPE_CDNSKEY    = 60
   TYPE_TKEY       = 249
   TYPE_TSIG       = 250
+  TYPE_IXFR       = 251
+  TYPE_AXFR       = 252
   TYPE_NONE       = 254
   TYPE_ANY        = 255
   TYPE_CAA        = 257
@@ -374,7 +377,8 @@ def try_udp
   
   while true
     puts "udp: recving..."
-    data = sock.recv(65536).unpack('C*')   # ASCII-8BIT
+    data, sa = sock.recvfrom(65536)
+    data = data.unpack('C*')   # ASCII-8BIT
     puts 'UDP:'
     
     begin
@@ -383,14 +387,15 @@ def try_udp
       # check zone.
       
       if req.zones.length != 1
-        raise new Ex(Request::RCODE_FORMERR, 'zone count is not 1.')
+        raise Ex.new(Request::RCODE_FORMERR, 'zone count is not 1.')
       end
       if req.zones[0].type != Request::TYPE_SOA
-        raise new Ex(Request::RCODE_FORMERR, 'zone is not SOA.')
+        raise Ex.new(Request::RCODE_FORMERR, 'zone is not SOA.')
       end
-      data = @data.select{ |dat| req.zones[0].name == dat[:name] }.first
+      data_alter = @data.dup
+      data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
       unless data
-        raise new Ex(Request::RCODE_NOTAUTH, 'unknown zone name.')
+        raise Ex.new(Request::RCODE_NOTAUTH, 'unknown zone name.')
       end
       
       # check prerequisites.
@@ -398,17 +403,17 @@ def try_udp
       req.prerequisites.each do |prereq|
         if prereq.class == Request::CLASS_ANY
           unless prereq.ttl == 0 && prereq.rdata.length == 0
-            raise new Ex(Request::RCODE_FORMERR, 'bad prereq 1.')
+            raise Ex.new(Request::RCODE_FORMERR, 'bad prereq 1.')
           end
           if prereq.type == Request::TYPE_ANY
             if data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
-              raise new Ex(Request::RCODE_NXDOMAIN, 'prereq: 2.')
+              raise Ex.new(Request::RCODE_NXDOMAIN, 'prereq: 2.')
             end
           else
             if data[:records].select{ |rr|
                  rr[:name] == prereq.name && rr[:type] == prereq.type
                }.length == 0
-              raise new Ex(Request::RCODE_NXRRSET, 'prereq: 3.')
+              raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 3.')
             end
           end
         end
@@ -417,18 +422,18 @@ def try_udp
       req.prerequisites.each do |prereq|
         if prereq.class == Request::CLASS_NONE
           unless prereq.ttl == 0 && prereq.rdata.length == 0
-            raise new Ex(Request::RCODE_FORMERR, 'bad prereq 4.')
+            raise Ex.new(Request::RCODE_FORMERR, 'bad prereq 4.')
           end
           
           if prereq.type == Request::TYPE_ANY
             if data[:records].select{ |rr| rr[:name] == prereq.name }.length != 0
-              raise new Ex(Request::RCODE_YXDOMAIN, 'prereq: 2.')
+              raise Ex.new(Request::RCODE_YXDOMAIN, 'prereq: 2.')
             end
           else
             if data[:records].select{ |rr|
                  rr[:name] == prereq.name && rr[:type] == prereq.type
                }.length != 0
-              raise new Ex(Request::RCODE_YXRRSET, 'prereq: 3.')
+              raise Ex.new(Request::RCODE_YXRRSET, 'prereq: 3.')
             end
           end
         end
@@ -438,26 +443,117 @@ def try_udp
       req.prerequisites.each do |prereq|
         if prereq.class == req.zones[0].class
           unless prereq.ttl == 0
-            raise new Ex(Request::RCODE_FORMERR, 'prereq: 4.')
+            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 4.')
           end
           r = [ prereq.name, prereq.type ]
           unless data[:records].include?(r)
-            raise new Ex(Request::RCODE_NXRRSET, 'prereq: 5.')
+            raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 5.')
           end
           rrset << r unless rrset.include?(r)
         end
       end
       if data[:records].length != rrset.length
-        raise new Ex(Request::RCODE_NXRRSET, 'prereq: 6.')
+        raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 6.')
       end
       
       req.prerequisites.each do |prereq|
         if prereq.class == req.zones[0].class
           unless [ req.zones[0].class, Request::CLASS_NONE, Request::CLASS_ANY ].include?(prereq.class)
-            raise new Ex(Request::RCODE_FORMERR, 'prereq: 7.')
+            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 7.')
           end
         end
       end
+      
+      # update
+      
+      req.updates.each do |update|
+        unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
+          raise Ex.new(Request::RCODE_FORMERR, 'update: 1.')
+        end
+        unless update.name.end_with?(req.zones[0].name)
+          raise Ex.new(Request::RCODE_NOTZONE, 'update: 2.')
+        end
+      end
+      
+      req.updates.each do |update|
+        if update.class != Request::CLASS_ANY
+          case update.type
+          when Request::TYPE_A
+          when Request::TYPE_AAAA
+          when Request::TYPE_PTR
+          when Request::TYPE_DHCID
+          else
+            puts "type=#{update.type}"
+            raise Ex.new(Request::RCODE_FORMERR, 'update: 3.')
+          end
+        end
+        if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
+          unless update.ttl == 0
+            raise Ex.new(Request::RCODE_FORMERR, 'update: 4.')
+          end
+        end
+        if update.class == Request::CLASS_ANY
+          unless update.rdata.length == 0
+            raise Ex.new(Request::RCODE_FORMERR, 'update: 5.')
+          end
+          case update.type
+          when Request::TYPE_A
+          when Request::TYPE_AAAA
+          when Request::TYPE_PTR
+          when Request::TYPE_DHCID
+          else
+            raise Ex.new(Request::RCODE_FORMERR, 'update: 6.')
+          end
+        end
+      end
+      
+      req.updates.each do |update|
+        if update.class == req.zones[0].class
+          replaced = false
+          data[:records].each do |rr|
+            if rr[:name] == update.name && rr[:type] == update.type
+              rr[:ttl] = update.ttl
+              rr[:rdata] = update.rdata
+              replaced = true
+            end
+          end
+          unless replaced
+            rr = {
+              name: update.name,
+              type: update.type,
+              ttl: update.ttl,
+              rdata: update.rdata,
+            }
+            data[:records] << rr
+          end
+        end
+        if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
+          # fixme: 3.4.2.3.
+          puts "del1."
+        end
+        if update.class == Request::CLASS_NONE
+          # fixme: 3.4.2.4.
+          puts "del2."
+        end
+      end
+      
+      # response
+      
+      @data = data_alter
+      puts @data
+      
+      res = [
+        (req.id >> 8) & 0xff, req.id & 0xff,
+        0x80 | Request::OPCODE_UPDATE << 3, 0,
+        0, 0,
+        0, 0,
+        0, 0,
+        0, 0,
+      ]
+      res = res.pack('C*')
+      # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
+      sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
+      sock.send(res, 0, sa)
       
       puts "OK."
       
