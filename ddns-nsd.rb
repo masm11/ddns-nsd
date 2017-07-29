@@ -1,6 +1,8 @@
 #!/usr/bin/env ruby
 
 require 'socket'
+require 'base64'
+require 'openssl'
 
 @data = [
   {
@@ -92,13 +94,19 @@ module Base
   RCODE_NOTAUTH  = 9
   RCODE_NOTZONE  = 10
   
+  TSIG_ERROR_BADSIG   = 16
+  TSIG_ERROR_BADKEY   = 17
+  TSIG_ERROR_BADTIME  = 18
+  
   def dump(ary, beg, len)
-    return
+    # return
     print "---------------------------------\n"
     print "[i=0x#{'%x' % beg}, len=#{len}]\n"
     len.times do |i|
       print ' %02x' % ary[beg + i]
-      print "\n" if i % 16 == 15
+      if i % 16 == 15
+        print "\n"
+      end
     end
     print "\n" unless len % 16 == 0
   end
@@ -109,6 +117,10 @@ module Base
   
   def read_4(data, i)
     [ data[i] << 24 | data[i + 1] << 16 | data[i + 2] << 8 | data[i + 3], i + 4]
+  end
+  
+  def read_6(data, i)
+    [ data[i] << 40 | data[i + 1] << 32 | data[i + 2] << 24 | data[i + 3] << 16 | data[i + 4] << 8 | data[i + 5], i + 6]
   end
   
   def read_domainname(data, i)
@@ -143,6 +155,7 @@ class Request
   class Zone
     include Base
     
+    attr_reader :start_pos
     attr_reader :name
     attr_reader :type
     attr_reader :class
@@ -155,6 +168,7 @@ class Request
     
     def read(data, i)
       puts "Zone:"
+      @start_pos = i
       @name, i = read_domainname(data, i)
       puts "  name=#{@name}"
       
@@ -179,6 +193,7 @@ class Request
     # NONE     rrset    empty    RRset does not exist
     # zone     rrset    rr       RRset exists (value dependent)
 
+    attr_reader :start_pos
     attr_reader :name
     attr_reader :type
     attr_reader :class
@@ -193,6 +208,7 @@ class Request
     
     def read(data, i)
       puts "Prerequisite:"
+      @start_pos = i
       @name, i = read_domainname(data, i)
       
       @type, i = read_2(data, i)
@@ -224,6 +240,7 @@ class Request
     # NONE     rrset    rr       Delete an RR from an RRset
     # zone     rrset    rr       Add to an RRset
     
+    attr_reader :start_pos
     attr_reader :name
     attr_reader :type
     attr_reader :class
@@ -238,6 +255,7 @@ class Request
     
     def read(data, i)
       puts "Update:"
+      @start_pos = i
       @name, i = read_domainname(data, i)
       
       @type, i = read_2(data, i)
@@ -262,6 +280,7 @@ class Request
   class Additional
     include Base
     
+    attr_reader :start_pos
     attr_reader :name
     attr_reader :type
     attr_reader :class
@@ -276,6 +295,7 @@ class Request
     
     def read(data, i)
       puts "Additional:"
+      @start_pos = i
       @name, i = read_domainname(data, i)
       
       @type, i = read_2(data, i)
@@ -357,6 +377,40 @@ class Request
     end
   end
 end
+  
+class TSIG
+  include Base
+  
+  attr_reader :alg
+  attr_reader :time
+  attr_reader :fudge
+  attr_reader :mac
+  attr_reader :orig_id
+  attr_reader :error
+  attr_reader :other
+  
+  def initialize(rdata)
+    i = 0
+    @alg, i = read_domainname(rdata, i)
+    @time, i = read_6(rdata, i)
+    @fudge, i = read_2(rdata, i)
+    mac_size, i = read_2(rdata, i)
+    @mac = rdata[i ... i + mac_size]
+    i += mac_size
+    @orig_id, i = read_2(rdata, i)
+    @error, i = read_2(rdata, i)
+    other_len, i = read_2(rdata, i)
+    @other = rdata[i ... i + other_len]
+    puts "TSIG:"
+    puts "  alg: #{@alg}"
+    puts "  time: #{@time}"
+    puts "  fudge: #{@fudge}"
+    puts "  mac: #{@mac}"
+    puts "  orig_id: #{@orig_id}"
+    puts "  error: #{@error}"
+    puts "  other: #{@other}"
+  end
+end
 
 def try_tcp
   sock = TCPServer.open('127.0.0.2', 53)
@@ -385,6 +439,70 @@ def try_udp
     begin
       req = Request.new(data)
       
+      # check TSIG.
+      
+      if req.additionals.length >= 1
+        if req.additionals.last.type == Request::TYPE_TSIG
+          puts "last additional rr is tsig."
+          
+          unless req.additionals.select{ |rr| rr.type == Request::TYPE_TSIG }.length == 1
+            # TSIG RR が複数あるらしい
+            raise Ex.new(Request::RCODE_FORMERR, 'multiple TSIG.')
+          end
+          
+          tsig = TSIG.new(req.additionals.last.rdata)
+          now = Time.now.to_i
+          unless now >= tsig.time && now < tsig.time + tsig.fudge
+            raise Ex.new(Request::RCODE_NOTAUTH, 'tsig badtime.')
+          end
+          
+          raw = data[0 ... req.additionals.last.start_pos]
+          if raw[11] != 0
+            raw[11] -= 1
+          else
+            raw[10] -= 1
+            raw[11] = 255
+          end
+          raw = raw.pack('C*')
+          key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
+          hmac = OpenSSL::HMAC.new(key, 'md5')
+          puts '--------'
+          p raw
+          hmac.update(raw)
+          p req.additionals.last.name.split('.').map{ |p|
+            [p.length].pack('C') + p
+          }.join('') + "\0"
+          hmac.update(req.additionals.last.name.split('.').map{ |p|
+                        [p.length].pack('C') + p
+                      }.join('') + "\0")
+          p [req.additionals.last.class].pack('n')
+          hmac.update([req.additionals.last.class].pack('n'))
+          p [0].pack('n')
+          hmac.update([0].pack('n'))
+          p tsig.alg.split('.').map{ |p|
+            [p.length].pack('C') + p
+          }.join('') + "\0"
+          hmac.update(tsig.alg.split('.').map{ |p|
+                        [p.length].pack('C') + p
+                      }.join('') + "\0")
+          p [tsig.time >> 32].pack('n')
+          hmac.update([tsig.time >> 32].pack('n'))
+          p [tsig.time].pack('N')
+          hmac.update([tsig.time].pack('N'))
+          p [tsig.fudge].pack('n')
+          hmac.update([tsig.fudge].pack('n'))
+          p [tsig.error].pack('n')
+          hmac.update([tsig.error].pack('n'))
+          p [tsig.other.length].pack('n')
+          hmac.update([tsig.other.length].pack('n'))
+          p tsig.other.pack('C*')
+          hmac.update(tsig.other.pack('C*'))
+          puts '--------'
+          puts "#{hmac.digest.unpack('C*')}"
+          puts "#{tsig.mac}"
+        end
+      end
+      
       # check zone.
       
       if req.zones.length != 1
@@ -404,7 +522,7 @@ def try_udp
       req.prerequisites.each do |prereq|
         if prereq.class == Request::CLASS_ANY
           unless prereq.ttl == 0 && prereq.rdata.length == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'bad prereq 1.')
+            raise Ex.new(Request::RCODE_FORMERR, 'prereq 1.')
           end
           if prereq.type == Request::TYPE_ANY
             if data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
@@ -423,18 +541,18 @@ def try_udp
       req.prerequisites.each do |prereq|
         if prereq.class == Request::CLASS_NONE
           unless prereq.ttl == 0 && prereq.rdata.length == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'bad prereq 4.')
+            raise Ex.new(Request::RCODE_FORMERR, 'prereq 4.')
           end
           
           if prereq.type == Request::TYPE_ANY
-            if data[:records].select{ |rr| rr[:name] == prereq.name }.length != 0
-              raise Ex.new(Request::RCODE_YXDOMAIN, 'prereq: 2.')
+            unless data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
+              raise Ex.new(Request::RCODE_YXDOMAIN, 'prereq: 5.')
             end
           else
-            if data[:records].select{ |rr|
-                 rr[:name] == prereq.name && rr[:type] == prereq.type
-               }.length != 0
-              raise Ex.new(Request::RCODE_YXRRSET, 'prereq: 3.')
+            unless data[:records].select{ |rr|
+                     rr[:name] == prereq.name && rr[:type] == prereq.type
+                   }.length == 0
+              raise Ex.new(Request::RCODE_YXRRSET, 'prereq: 6.')
             end
           end
         end
@@ -443,12 +561,12 @@ def try_udp
       req.prerequisites.each do |prereq|
         if prereq.class == req.zones[0].class
           unless prereq.ttl == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 4.')
+            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 7.')
           end
           if data[:records].select{ |d|
                d[:name] == prereq.name && d[:type] == prereq.type && d[:rdata] == prereq.rdata
              }.length == 0
-            raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 5.')
+            raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 8.')
           end
         end
       end
