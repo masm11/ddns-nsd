@@ -93,6 +93,7 @@ module Base
   RCODE_NOTZONE  = 10
   
   def dump(ary, beg, len)
+    return
     print "---------------------------------\n"
     print "[i=0x#{'%x' % beg}, len=#{len}]\n"
     len.times do |i|
@@ -153,14 +154,14 @@ class Request
     end
     
     def read(data, i)
-      puts "Zone:------------------------------"
+      puts "Zone:"
       @name, i = read_domainname(data, i)
-      puts "ZNAME='#{@name}'"
+      puts "  name=#{@name}"
       
       @type, i = read_2(data, i)
       @class, i = read_2(data, i)
-      puts "ZTYPE=#{@type}"   # must be SOA.
-      puts "ZCLASS=#{@class}" # zone's class.
+      puts "  type=#{@type}"
+      puts "  class=#{@class}"
       
       dump(data, i, data.length - i)
       i
@@ -191,7 +192,7 @@ class Request
     end
     
     def read(data, i)
-      puts "Prereq:------------------------------"
+      puts "Prerequisite:"
       @name, i = read_domainname(data, i)
       
       @type, i = read_2(data, i)
@@ -201,12 +202,12 @@ class Request
       @rdata = data[i ... i + rdlength]
       i += rdlength
       
-      puts "RR name=#{@name}"
-      puts "RR type=#{@type}"
-      puts "RR class=#{@class}"
-      puts "RR ttl=#{@ttl}"
-      puts "RR rdlength=#{rdlength}"
-      puts "RR rdata=#{@rdata}"
+      puts "  name=#{@name}"
+      puts "  type=#{@type}"
+      puts "  class=#{@class}"
+      puts "  ttl=#{@ttl}"
+      puts "  rdlength=#{rdlength}"
+      puts "  rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -236,7 +237,7 @@ class Request
     end
     
     def read(data, i)
-      puts "Update:------------------------------"
+      puts "Update:"
       @name, i = read_domainname(data, i)
       
       @type, i = read_2(data, i)
@@ -246,12 +247,12 @@ class Request
       @rdata = data[i...i + rdlength]
       i += rdlength
       
-      puts "RR name=#{@name}"
-      puts "RR type=#{@type}"
-      puts "RR class=#{@class}"
-      puts "RR ttl=#{@ttl}"
-      puts "RR rdlength=#{rdlength}"
-      puts "RR rdata=#{@rdata}"
+      puts "  name=#{@name}"
+      puts "  type=#{@type}"
+      puts "  class=#{@class}"
+      puts "  ttl=#{@ttl}"
+      puts "  rdlength=#{rdlength}"
+      puts "  rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -274,7 +275,7 @@ class Request
     end
     
     def read(data, i)
-      puts "Additional:------------------------------"
+      puts "Additional:"
       @name, i = read_domainname(data, i)
       
       @type, i = read_2(data, i)
@@ -284,12 +285,12 @@ class Request
       @rdata = data[i...i + rdlength]
       i += rdlength
       
-      puts "RR name=#{@name}"
-      puts "RR type=#{@type}"
-      puts "RR class=#{@class}"
-      puts "RR ttl=#{@ttl}"
-      puts "RR rdlength=#{rdlength}"
-      puts "RR rdata=#{@rdata}"
+      puts "  name=#{@name}"
+      puts "  type=#{@type}"
+      puts "  class=#{@class}"
+      puts "  ttl=#{@ttl}"
+      puts "  rdlength=#{rdlength}"
+      puts "  rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -322,14 +323,14 @@ class Request
     prcount, i = read_2(data, i)
     upcount, i = read_2(data, i)
     adcount, i = read_2(data, i)
-    puts "QR=#{@qr} (#{@qr == 0 ? 'req' : 'res'})"
-    puts "Opcode=0x#{'%x' % @opcode} (#{@opcode == 5 ? 'UPDATE' : '??????'})"
-    puts "Z=0x#{'%02x' % @z} (#{@z == 0 ? 'ok' : 'unknown'})"
-    puts "RCODE=0x#{'%x' % @rcode}"
-    puts "ZOCOUNT=#{zocount} (#zone)"
-    puts "PRCOUNT=#{prcount} (#prereq)"
-    puts "UPCOUNT=#{upcount} (#update)"
-    puts "ADCOUNT=#{adcount} (#additional)"
+    puts "  QR=#{@qr} (#{@qr == 0 ? 'req' : 'res'})"
+    puts "  Opcode=0x#{'%x' % @opcode} (#{@opcode == 5 ? 'UPDATE' : '??????'})"
+    puts "  Z=0x#{'%02x' % @z} (#{@z == 0 ? 'ok' : 'unknown'})"
+    puts "  RCODE=0x#{'%x' % @rcode}"
+    puts "  ZOCOUNT=#{zocount} (#zone)"
+    puts "  PRCOUNT=#{prcount} (#prereq)"
+    puts "  UPCOUNT=#{upcount} (#update)"
+    puts "  ADCOUNT=#{adcount} (#additional)"
     
     @zones = []
     zocount.times do
@@ -439,27 +440,15 @@ def try_udp
         end
       end
       
-      rrset = []
       req.prerequisites.each do |prereq|
         if prereq.class == req.zones[0].class
           unless prereq.ttl == 0
             raise Ex.new(Request::RCODE_FORMERR, 'prereq: 4.')
           end
-          r = [ prereq.name, prereq.type ]
-          unless data[:records].include?(r)
+          if data[:records].select{ |d|
+               d[:name] == prereq.name && d[:type] == prereq.type && d[:rdata] == prereq.rdata
+             }.length == 0
             raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 5.')
-          end
-          rrset << r unless rrset.include?(r)
-        end
-      end
-      if data[:records].length != rrset.length
-        raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 6.')
-      end
-      
-      req.prerequisites.each do |prereq|
-        if prereq.class == req.zones[0].class
-          unless [ req.zones[0].class, Request::CLASS_NONE, Request::CLASS_ANY ].include?(prereq.class)
-            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 7.')
           end
         end
       end
