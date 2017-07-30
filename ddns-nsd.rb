@@ -1,12 +1,38 @@
 #!/usr/bin/env ruby
 
+require 'syslog'
 require 'socket'
 require 'base64'
 require 'openssl'
 
+Syslog.open 'ddns-nsd'
+
+module Log
+  def debug(msg)
+    Syslog.debug '%s', msg
+  end
+  def info(msg)
+    Syslog.info '%s', msg
+  end
+  def err(msg)
+    Syslog.err '%s', msg
+  end
+  module_function :debug
+  module_function :info
+  module_function :err
+end
+
 @data = [
   {
     name: 'pink.masm11.ddo.jp.',
+    records: [],
+  },
+  {
+    name: '168.192.in-addr.arpa.',
+    records: [],
+  },
+  {
+    name: '1.0.0.0.8.6.9.8.6.9.0.0.f.0.4.2.ip6.arpa.',
     records: [],
   },
 ]
@@ -99,7 +125,7 @@ module Base
   TSIG_ERROR_BADTIME  = 18
   
   def dump(ary, beg, len)
-    # return
+    return
     print "---------------------------------\n"
     print "[i=0x#{'%x' % beg}, len=#{len}]\n"
     len.times do |i|
@@ -167,15 +193,15 @@ class Request
     end
     
     def read(data, i)
-      puts "Zone:"
+      Log.debug "Zone:"
       @start_pos = i
       @name, i = read_domainname(data, i)
-      puts "  name=#{@name}"
+      Log.debug "  name=#{@name}"
       
       @type, i = read_2(data, i)
       @class, i = read_2(data, i)
-      puts "  type=#{@type}"
-      puts "  class=#{@class}"
+      Log.debug "  type=#{@type}"
+      Log.debug "  class=#{@class}"
       
       dump(data, i, data.length - i)
       i
@@ -207,7 +233,7 @@ class Request
     end
     
     def read(data, i)
-      puts "Prerequisite:"
+      Log.debug "Prerequisite:"
       @start_pos = i
       @name, i = read_domainname(data, i)
       
@@ -218,12 +244,12 @@ class Request
       @rdata = data[i ... i + rdlength]
       i += rdlength
       
-      puts "  name=#{@name}"
-      puts "  type=#{@type}"
-      puts "  class=#{@class}"
-      puts "  ttl=#{@ttl}"
-      puts "  rdlength=#{rdlength}"
-      puts "  rdata=#{@rdata}"
+      Log.debug "  name=#{@name}"
+      Log.debug "  type=#{@type}"
+      Log.debug "  class=#{@class}"
+      Log.debug "  ttl=#{@ttl}"
+      Log.debug "  rdlength=#{rdlength}"
+      Log.debug "  rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -254,7 +280,7 @@ class Request
     end
     
     def read(data, i)
-      puts "Update:"
+      Log.debug "Update:"
       @start_pos = i
       @name, i = read_domainname(data, i)
       
@@ -265,12 +291,12 @@ class Request
       @rdata = data[i...i + rdlength]
       i += rdlength
       
-      puts "  name=#{@name}"
-      puts "  type=#{@type}"
-      puts "  class=#{@class}"
-      puts "  ttl=#{@ttl}"
-      puts "  rdlength=#{rdlength}"
-      puts "  rdata=#{@rdata}"
+      Log.debug "  name=#{@name}"
+      Log.debug "  type=#{@type}"
+      Log.debug "  class=#{@class}"
+      Log.debug "  ttl=#{@ttl}"
+      Log.debug "  rdlength=#{rdlength}"
+      Log.debug "  rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -294,7 +320,7 @@ class Request
     end
     
     def read(data, i)
-      puts "Additional:"
+      Log.debug "Additional:"
       @start_pos = i
       @name, i = read_domainname(data, i)
       
@@ -305,12 +331,12 @@ class Request
       @rdata = data[i...i + rdlength]
       i += rdlength
       
-      puts "  name=#{@name}"
-      puts "  type=#{@type}"
-      puts "  class=#{@class}"
-      puts "  ttl=#{@ttl}"
-      puts "  rdlength=#{rdlength}"
-      puts "  rdata=#{@rdata}"
+      Log.debug "  name=#{@name}"
+      Log.debug "  type=#{@type}"
+      Log.debug "  class=#{@class}"
+      Log.debug "  ttl=#{@ttl}"
+      Log.debug "  rdlength=#{rdlength}"
+      Log.debug "  rdata=#{@rdata}"
       
       dump(data, i, data.length - i)
       i
@@ -331,7 +357,7 @@ class Request
     i = 0
     
     @id, i = read_2(data, i)
-    puts "ID=0x#{"%04x" % @id}"
+    Log.debug "ID=0x#{"%04x" % @id}"
     
     vals, i = read_2(data, i)
     @qr = (vals >> 15) & 1
@@ -343,14 +369,14 @@ class Request
     prcount, i = read_2(data, i)
     upcount, i = read_2(data, i)
     adcount, i = read_2(data, i)
-    puts "  QR=#{@qr} (#{@qr == 0 ? 'req' : 'res'})"
-    puts "  Opcode=0x#{'%x' % @opcode} (#{@opcode == 5 ? 'UPDATE' : '??????'})"
-    puts "  Z=0x#{'%02x' % @z} (#{@z == 0 ? 'ok' : 'unknown'})"
-    puts "  RCODE=0x#{'%x' % @rcode}"
-    puts "  ZOCOUNT=#{zocount} (#zone)"
-    puts "  PRCOUNT=#{prcount} (#prereq)"
-    puts "  UPCOUNT=#{upcount} (#update)"
-    puts "  ADCOUNT=#{adcount} (#additional)"
+    Log.debug "  QR=#{@qr} (#{@qr == 0 ? 'req' : 'res'})"
+    Log.debug "  Opcode=0x#{'%x' % @opcode} (#{@opcode == 5 ? 'UPDATE' : '??????'})"
+    Log.debug "  Z=0x#{'%02x' % @z} (#{@z == 0 ? 'ok' : 'unknown'})"
+    Log.debug "  RCODE=0x#{'%x' % @rcode}"
+    Log.debug "  ZOCOUNT=#{zocount} (#zone)"
+    Log.debug "  PRCOUNT=#{prcount} (#prereq)"
+    Log.debug "  UPCOUNT=#{upcount} (#update)"
+    Log.debug "  ADCOUNT=#{adcount} (#additional)"
     
     @zones = []
     zocount.times do
@@ -401,102 +427,106 @@ class TSIG
     @error, i = read_2(rdata, i)
     other_len, i = read_2(rdata, i)
     @other = rdata[i ... i + other_len]
-    puts "TSIG:"
-    puts "  alg: #{@alg}"
-    puts "  time: #{@time}"
-    puts "  fudge: #{@fudge}"
-    puts "  mac: #{@mac}"
-    puts "  orig_id: #{@orig_id}"
-    puts "  error: #{@error}"
-    puts "  other: #{@other}"
+    Log.debug "TSIG:"
+    Log.debug "  alg: #{@alg}"
+    Log.debug "  time: #{@time}"
+    Log.debug "  fudge: #{@fudge}"
+    Log.debug "  mac: #{@mac}"
+    Log.debug "  orig_id: #{@orig_id}"
+    Log.debug "  error: #{@error}"
+    Log.debug "  other: #{@other}"
   end
 end
 
 def check_tsig(req, data)
-  if req.additionals.length >= 1
-    if req.additionals.last.type == Request::TYPE_TSIG
-      puts "last additional rr is tsig."
-      
-      unless req.additionals.select{ |rr| rr.type == Request::TYPE_TSIG }.length == 1
-        # TSIG RR が複数あるらしい
-        raise Ex.new(Request::RCODE_FORMERR, 'multiple TSIG.')
-      end
-      
-      tsig = TSIG.new(req.additionals.last.rdata)
-      now = Time.now.to_i
-      unless now >= tsig.time && now < tsig.time + tsig.fudge
-        raise Ex.new(Request::RCODE_NOTAUTH, 'tsig badtime.')
-      end
-      
-      raw = data[0 ... req.additionals.last.start_pos]
-      if raw[11] != 0
-        raw[11] -= 1
-      else
-        raw[10] -= 1
-        raw[11] = 255
-      end
-      raw = raw.pack('C*')
-      key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
-      hmac = OpenSSL::HMAC.new(key, 'md5')
-      hmac.update(raw)
-      hmac.update(req.additionals.last.name.split('.').map{ |p|
-                    [p.length].pack('C') + p
-                  }.join('') + "\0")
-      hmac.update([req.additionals.last.class].pack('n'))
-      hmac.update([0].pack('N'))
-      hmac.update(tsig.alg.split('.').map{ |p|
-                    [p.length].pack('C') + p
-                  }.join('') + "\0")
-      hmac.update([tsig.time >> 32].pack('n'))
-      hmac.update([tsig.time].pack('N'))
-      hmac.update([tsig.fudge].pack('n'))
-      hmac.update([tsig.error].pack('n'))
-      hmac.update([tsig.other.length].pack('n'))
-      hmac.update(tsig.other.pack('C*'))
-      
-      puts "#{hmac.digest.unpack('C*')}"
-      puts "#{tsig.mac}"
-      unless hmac.digest == tsig.mac.pack('C*')
-        raise Ex.new(Request::RCODE_NOTAUTH, 'TSIG: bad sig.')
-      end
-      
-      tsig
-    end
+  unless req.additionals.length >= 1
+    Log.err 'No TSIG.'
   end
+  unless req.additionals.last.type == Request::TYPE_TSIG
+    Log.err "Last additional RR is not TSIG."
+  end
+  
+  unless req.additionals.select{ |rr| rr.type == Request::TYPE_TSIG }.length == 1
+    # TSIG RR が複数あるらしい
+    Log.err 'Multiple TSIG.'
+    raise Ex.new(Request::RCODE_FORMERR, 'multiple TSIG.')
+  end
+  
+  tsig = TSIG.new(req.additionals.last.rdata)
+  now = Time.now.to_i
+  unless now >= tsig.time && now < tsig.time + tsig.fudge
+    Log.err 'TSIG bad time.'
+    raise Ex.new(Request::RCODE_NOTAUTH, 'tsig badtime.')
+  end
+  
+  raw = data[0 ... req.additionals.last.start_pos]
+  if raw[11] != 0
+    raw[11] -= 1
+  else
+    raw[10] -= 1
+    raw[11] = 255
+  end
+  raw = raw.pack('C*')
+  key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
+  hmac = OpenSSL::HMAC.new(key, 'md5')
+  hmac.update(raw)
+  hmac.update(req.additionals.last.name.split('.').map{ |p|
+                [p.length].pack('C') + p
+              }.join('') + "\0")
+  hmac.update([req.additionals.last.class].pack('n'))
+  hmac.update([0].pack('N'))
+  hmac.update(tsig.alg.split('.').map{ |p|
+                [p.length].pack('C') + p
+              }.join('') + "\0")
+  hmac.update([tsig.time >> 32].pack('n'))
+  hmac.update([tsig.time].pack('N'))
+  hmac.update([tsig.fudge].pack('n'))
+  hmac.update([tsig.error].pack('n'))
+  hmac.update([tsig.other.length].pack('n'))
+  hmac.update(tsig.other.pack('C*'))
+  
+  Log.debug "#{hmac.digest.unpack('C*')}"
+  Log.debug "#{tsig.mac}"
+  unless hmac.digest == tsig.mac.pack('C*')
+    Log.err 'TSIG signature not match.'
+    raise Ex.new(Request::RCODE_NOTAUTH, 'TSIG: bad sig.')
+  end
+  
+  tsig
 end
 
-def sign_tsig(res, req, tsig)
+def sign_tsig(res, req, mac)
   now = Time.now.to_i
   key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
   hmac = OpenSSL::HMAC.new(key, 'md5')
-  hmac.update([tsig.mac.length].pack('n'))
-  hmac.update(tsig.mac.pack('C*'))
+  hmac.update([mac.length].pack('n'))
+  hmac.update(mac.pack('C*'))
   hmac.update(res.pack('C*'))
   hmac.update('dhcp_updater'.split('.').map{ |p|
                 [p.length].pack('C') + p
               }.join('') + "\0")
   hmac.update([Request::CLASS_ANY].pack('n'))
-  hmac.update([0].pack('N'))
+  hmac.update([0].pack('N'))    # TTL
   hmac.update('hmac-md5.sig-alg.reg.int'.split('.').map{ |p|
                 [p.length].pack('C') + p
               }.join('') + "\0")
   hmac.update([now >> 32].pack('n'))
   hmac.update([now].pack('N'))
-  hmac.update([300].pack('n'))
-  hmac.update([0].pack('n'))
-  hmac.update([0].pack('n'))
+  hmac.update([300].pack('n'))  # fudge
+  hmac.update([0].pack('n'))    # error
+  hmac.update([0].pack('n'))    # other len
   digest = hmac.digest
   
   rdata = [
     "\x08hmac-md5\x07sig-alg\x03reg\x03int\x00",
     [now >> 32].pack('n'),
     [now].pack('N'),
-    [300].pack('n'),
+    [300].pack('n'),  # fudge
     [digest.length].pack('n'),
     digest,
     [req.id].pack('n'),
-    [0].pack('n'),
-    [0].pack('n'),
+    [0].pack('n'),    # error
+    [0].pack('n'),    # other len
   ].join('')
   
   if res[11] == 0xff
@@ -520,14 +550,14 @@ end
 def try_tcp
   sock = TCPServer.open('127.0.0.2', 53)
   
-  puts "tcp: accepting..."
+  Log.debug "tcp: accepting..."
   s = sock.accept
   while true
-    puts "tcp: recving..."
+    Log.debug "tcp: recving..."
     data = s.recv(65536)
     break if data.length == 0
-    puts "TCP:"
-    puts data
+    Log.debug "TCP:"
+    Log.debug data
   end
 end
 
@@ -536,10 +566,12 @@ def try_udp
   sock.bind('127.0.0.2', 53)
   
   while true
-    puts "udp: recving..."
+    Log.debug "udp: recving..."
     data, sa = sock.recvfrom(65536)
     data = data.unpack('C*')   # ASCII-8BIT
-    puts 'UDP:'
+    Log.debug 'UDP:'
+    
+    tsig = nil
     
     begin
       req = Request.new(data)
@@ -556,6 +588,7 @@ def try_udp
         raise Ex.new(Request::RCODE_FORMERR, 'zone is not SOA.')
       end
       data_alter = @data.dup
+      Log.info "zone: #{req.zones[0].name}"
       data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
       unless data
         raise Ex.new(Request::RCODE_NOTAUTH, 'unknown zone name.')
@@ -634,7 +667,7 @@ def try_udp
           when Request::TYPE_PTR
           when Request::TYPE_DHCID
           else
-            puts "type=#{update.type}"
+            Log.debug "type=#{update.type}"
             raise Ex.new(Request::RCODE_FORMERR, 'update: 3.')
           end
         end
@@ -659,6 +692,7 @@ def try_udp
       end
       
       req.updates.each do |update|
+        Log.info "update: name: #{update.name}, type: #{update.type}, ttl: #{update.ttl}, rdata: #{update.rdata}"
         if update.class == req.zones[0].class
           replaced = false
           data[:records].each do |rr|
@@ -680,18 +714,18 @@ def try_udp
         end
         if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
           # fixme: 3.4.2.3.
-          puts "del1."
+          Log.debug "del1."
         end
         if update.class == Request::CLASS_NONE
           # fixme: 3.4.2.4.
-          puts "del2."
+          Log.debug "del2."
         end
       end
       
       # response
       
       @data = data_alter
-      puts @data
+      Log.debug @data
       
       res = [
         (req.id >> 8) & 0xff, req.id & 0xff,
@@ -701,16 +735,31 @@ def try_udp
         0, 0,
         0, 0,
       ]
-      res = sign_tsig(res, req, tsig)
+      res = sign_tsig(res, req, tsig.mac)
       # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
       sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
       sock.send(res, 0, sa)
       
-      puts "OK."
+      Log.debug "OK."
       
     rescue => e
-      puts e.to_s
-      puts e.backtrace
+      Log.info e.to_s
+      Log.debug e.backtrace.join("\n")
+      
+      res = [
+        (req.id >> 8) & 0xff, req.id & 0xff,
+        0x80 | Request::OPCODE_UPDATE << 3, e.is_a?(Ex) ? e.code : Request::RCODE_SERVFAIL,
+        0, 0,
+        0, 0,
+        0, 0,
+        0, 0,
+      ]
+      if tsig && tsig.mac
+        res = sign_tsig(res, req, tsig.mac)
+      end
+      # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
+      sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
+      sock.send(res, 0, sa)
     end
     
   end
