@@ -469,6 +469,8 @@ def sign_tsig(res, req, tsig)
   now = Time.now.to_i
   key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
   hmac = OpenSSL::HMAC.new(key, 'md5')
+  hmac.update([tsig.mac.length].pack('n'))
+  hmac.update(tsig.mac.pack('C*'))
   hmac.update(res.pack('C*'))
   hmac.update('dhcp_updater'.split('.').map{ |p|
                 [p.length].pack('C') + p
@@ -483,8 +485,6 @@ def sign_tsig(res, req, tsig)
   hmac.update([300].pack('n'))
   hmac.update([0].pack('n'))
   hmac.update([0].pack('n'))
-  hmac.update([tsig.mac.length].pack('n'))
-  hmac.update(tsig.mac.pack('C*'))
   digest = hmac.digest
   
   rdata = [
