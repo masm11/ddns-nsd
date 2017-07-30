@@ -4,6 +4,8 @@ require 'syslog'
 require 'socket'
 require 'base64'
 require 'openssl'
+require 'json'
+require 'yaml'
 
 Syslog.open 'ddns-nsd'
 
@@ -21,24 +23,6 @@ module Log
   module_function :info
   module_function :err
 end
-
-@data = [
-  {
-    name: 'pink.masm11.ddo.jp.',
-    file: '/etc/nsd/pink.masm11.ddo.jp.zone',
-    records: [],
-  },
-  {
-    name: '168.192.in-addr.arpa.',
-    file: '/etc/nsd/168.192.in-addr.arpa.zone',
-    records: [],
-  },
-  {
-    name: '1.0.0.0.8.6.9.8.6.9.0.0.f.0.4.2.ip6.arpa.',
-    file: '/etc/nsd/1.0.0.0.8.6.9.8.6.9.0.0.f.0.4.2.ip6.arpa.zone',
-    records: [],
-  },
-]
 
 class Ex < StandardError
   attr_reader :code
@@ -439,6 +423,24 @@ class TSIG
     Log.debug "  error: #{@error}"
     Log.debug "  other: #{@other}"
   end
+  
+  attr_accessor :my_alg
+  attr_accessor :my_key
+end
+
+def select_key(name)
+  @keys.each do |key|
+    Log.debug "'#{key['name']}' vs '#{name}'"
+    if key['name'] == name
+      raise "No secret in key #{name}" unless key['secret']
+      raise "No alg in key #{name}" unless key['alg']
+      sec = Base64.decode64(key['secret'])
+      alg = key['alg'].sub(/\..*/, '').sub(/^hmac-/i, '')
+      return [ sec, alg ]
+    end
+  end
+  
+  raise Ex.new(Request::RCODE_NOTAUTH, "Unknown key: #{name}")
 end
 
 def check_tsig(req, data)
@@ -470,8 +472,10 @@ def check_tsig(req, data)
     raw[11] = 255
   end
   raw = raw.pack('C*')
-  key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
-  hmac = OpenSSL::HMAC.new(key, 'md5')
+  key, alg = select_key(req.additionals.last.name)
+  tsig.my_key = key
+  tsig.my_alg = alg
+  hmac = OpenSSL::HMAC.new(key, alg)
   hmac.update(raw)
   hmac.update(req.additionals.last.name.split('.').map{ |p|
                 [p.length].pack('C') + p
@@ -498,12 +502,11 @@ def check_tsig(req, data)
   tsig
 end
 
-def sign_tsig(res, req, mac)
+def sign_tsig(res, req, tsig)
   now = Time.now.to_i
-  key = Base64.decode64('pRP5FapFoJ95JEL06sv4PQ==')
-  hmac = OpenSSL::HMAC.new(key, 'md5')
-  hmac.update([mac.length].pack('n'))
-  hmac.update(mac.pack('C*'))
+  hmac = OpenSSL::HMAC.new(tsig.my_key, tsig.my_alg)
+  hmac.update([tsig.mac.length].pack('n'))
+  hmac.update(tsig.mac.pack('C*'))
   hmac.update(res.pack('C*'))
   hmac.update('dhcp_updater'.split('.').map{ |p|
                 [p.length].pack('C') + p
@@ -660,23 +663,66 @@ def update_zone_files
   end
 end
 
-def try_tcp
-  sock = TCPServer.open('127.0.0.2', 53)
-  
-  Log.debug "tcp: accepting..."
-  s = sock.accept
-  while true
-    Log.debug "tcp: recving..."
-    data = s.recv(65536)
-    break if data.length == 0
-    Log.debug "TCP:"
-    Log.debug data
+def save_data
+  json = JSON.generate(@data)
+  File.open(@json_filename, 'w', 0666) do |f|
+    f.write(json)
   end
+end
+
+def load_data(config)
+  conf = YAML.load_file(config)
+  
+  @json_filename = conf['json']
+  raise 'No json in config.' unless @json_filename
+  @listen = conf['listen']
+  raise 'No listen in config.' unless @listen
+  raise 'listen must be an array of a string.' unless @listen.is_a?(Array)
+  raise 'listen must be an array containing only one string.' unless @listen.length == 1
+  @keys = conf['keys']
+  raise 'No keys in config.' unless @keys
+  raise 'keys must be an array.' unless @keys.is_a?(Array)
+  
+  zones = conf['zones']
+  raise 'No zones in config.' unless zones
+  raise 'zones must be an array.' unless zones.is_a?(Array)
+  
+  begin
+    json = File.read(@json_filename)
+    @data = JSON.parse(json, symbolize_names: true)
+  rescue Errno::ENOENT => e
+    Log.info "No JSON file."
+    @data = []
+  end
+  
+  zones.each do |zone|
+    Log.debug(zone)
+    raise 'A zone does not have name.' unless zone['name']
+    raise 'A zone does not have file.' unless zone['file']
+    data = @data.select{|d| d[:name] == zone['name']}.first
+    unless data
+      Log.info("New zone: #{zone['name']}")
+      data = {}
+      data[:name] = zone['name']
+      data[:file] = zone['file']
+      data[:records] = []
+      @data << data
+    else
+      if data[:file] != zone['file']
+        Log.info("Zone filename changed: #{zone['name']}")
+        data[:file] = zone['file']
+      end
+    end
+    raise "Zone file does not exist: #{data[:file]}" unless File.exists?(data[:file])
+  end
+  
+  save_data
 end
 
 def try_udp
   sock = UDPSocket.new
-  sock.bind('127.0.0.2', 53)
+  raise "Bad listen." unless @listen[0] =~ /\A([^:]+):(\d+)\z/
+  sock.bind($1, $2.to_i)
   
   while true
     Log.debug "udp: recving..."
@@ -841,6 +887,7 @@ def try_udp
       Log.debug @data
       
       update_zone_files
+      save_data
       
       res = [
         (req.id >> 8) & 0xff, req.id & 0xff,
@@ -850,7 +897,7 @@ def try_udp
         0, 0,
         0, 0,
       ]
-      res = sign_tsig(res, req, tsig.mac)
+      res = sign_tsig(res, req, tsig)
       # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
       sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
       sock.send(res, 0, sa)
@@ -869,8 +916,10 @@ def try_udp
         0, 0,
         0, 0,
       ]
-      if tsig && tsig.mac
-        res = sign_tsig(res, req, tsig.mac)
+      if tsig
+        res = sign_tsig(res, req, tsig)
+      else
+        res = res.pack('C*')
       end
       # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
       sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
@@ -880,7 +929,9 @@ def try_udp
   end
 end
 
-Thread.new do
-  try_tcp
-end
+raise 'Config file not specified.' unless ARGV[0]
+
+Log.info 'Starting ddns-nsd.'
+
+load_data(ARGV[0])
 try_udp
