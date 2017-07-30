@@ -659,7 +659,10 @@ def update_zone_files
   end
   
   if need_reload
-    system('systemctl reload nsd')
+    Log.debug('reloading nsd.')
+    unless system('systemctl reload nsd')
+      raise "Failed to reload nsd."
+    end
   end
 end
 
