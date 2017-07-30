@@ -25,14 +25,17 @@ end
 @data = [
   {
     name: 'pink.masm11.ddo.jp.',
+    file: '/etc/nsd/pink.masm11.ddo.jp.zone',
     records: [],
   },
   {
     name: '168.192.in-addr.arpa.',
+    file: '/etc/nsd/168.192.in-addr.arpa.zone',
     records: [],
   },
   {
     name: '1.0.0.0.8.6.9.8.6.9.0.0.f.0.4.2.ip6.arpa.',
+    file: '/etc/nsd/1.0.0.0.8.6.9.8.6.9.0.0.f.0.4.2.ip6.arpa.zone',
     records: [],
   },
 ]
@@ -547,6 +550,116 @@ def sign_tsig(res, req, mac)
   ].join('')
 end
 
+def update_zone_file(data)
+  Log.debug('update_zone_file')
+  lines2 = File.readlines(data[:file])
+  lines1 = []
+  while lines2.length >= 1
+    line = lines2.shift
+    break if line =~ /^; DDNS-NSD:/
+    lines1 << line
+  end
+  
+  new_lines2 = []
+  
+  data[:records].sort{ |a, b|
+    r = 0
+    if r == 0
+      r = a[:name] <=> b[:name]
+    end
+    if r == 0
+      r = a[:type] <=> b[:type]
+    end
+    r
+  }.each do |d|
+    line = d[:name]
+    line += ' IN '
+    case d[:type]
+    when Request::TYPE_A
+      line += 'A '
+      line += d[:rdata].join('.')
+    when Request::TYPE_AAAA
+      line += 'AAAA '
+      line += (0...8).map{ |i|
+        '%02x%02x' % [ d[:rdata][i * 2], d[:rdata][i * 2 + 1] ]
+      }.join(':')
+    when Request::TYPE_PTR
+      line += 'PTR '
+      i = 0
+      while d[:rdata][i] != 0
+        line += d[:rdata][i + 1 ... i + 1 + d[:rdata][i]].pack('C*')
+        line += '.'
+        i += 1 + d[:rdata][i]
+      end
+    when Request::TYPE_DHCID
+      line += 'DHCID ( '
+      line += Base64.encode64(d[:rdata].pack('C*')).strip.gsub(/\s/, '')
+      line += ' )'
+    end
+    
+    new_lines2 << line
+  end
+  
+  eq = true
+  if lines2.length != new_lines2.length
+    eq = false
+  else
+    lines2.length.times do |i|
+      eq = false if lines2[i] != new_lines2[i]
+    end
+  end
+  if eq
+    Log.info("zone file #{data[:file]} not changed.")
+    false
+  else
+    Log.info("zone file #{data[:file]} differ.")
+    File.open("#{data[:file]}.new", 'w', 0666) do |f|
+      lines1.each do |l|
+        if l =~ /(\d+).+DDNS-NSD-SERIAL/
+          date = Time.now.localtime.strftime('%Y%m%d')
+          cur_serial = $1
+          if cur_serial =~ /^#{date}(\d+)/
+            rev = $1.to_i
+            if rev >= 99
+              rev = '00'
+            else
+              rev = '%02d' % (rev + 1)
+            end
+          else
+            rev = '00'
+          end
+          new_serial = date + rev
+          
+          l = l.sub(/\d+/, new_serial)
+        end
+        f.puts l
+      end
+      f.puts "; DDNS-NSD: --- DON'T EDIT MANUALLY BELOW THIS LINE. ---"
+      new_lines2.each do |l|
+        f.puts l
+      end
+    end
+    File.rename("#{data[:file]}.new", "#{data[:file]}")
+    Log.debug('update done.')
+    true
+  end
+end
+
+def update_zone_files
+  Log.debug('update_zone_files')
+  
+  need_reload = false
+  @data.each do |data|
+    if update_zone_file(data)
+      need_reload = true
+    end
+  end
+  
+  if need_reload
+    system('systemctl reload nsd')
+  end
+end
+
 def try_tcp
   sock = TCPServer.open('127.0.0.2', 53)
   
@@ -726,6 +839,8 @@ def try_udp
       
       @data = data_alter
       Log.debug @data
+      
+      update_zone_files
       
       res = [
         (req.id >> 8) & 0xff, req.id & 0xff,
