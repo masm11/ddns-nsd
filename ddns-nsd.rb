@@ -955,6 +955,34 @@ def try_udp
       
     rescue => e
       Log.info e.to_s
+      if e.is_a?(Ex)
+        case e.code
+        when Request::RCODE_NOERROR
+          Log.info '-> NOERROR'
+        when Request::RCODE_FORMERR
+          Log.info '-> FORMERR'
+        when Request::RCODE_SERVFAIL
+          Log.info '-> SERVFAIL'
+        when Request::RCODE_NXDOMAIN
+          Log.info '-> NXDOMAIN'
+        when Request::RCODE_NOTIMP
+          Log.info '-> NOTIMP'
+        when Request::RCODE_REFUSED
+          Log.info '-> REFUSED'
+        when Request::RCODE_YXDOMAIN
+          Log.info '-> YXDOMAIN'
+        when Request::RCODE_YXRRSET
+          Log.info '-> YXRRSET'
+        when Request::RCODE_NXRRSET
+          Log.info '-> NXRRSET'
+        when Request::RCODE_NOTAUTH
+          Log.info '-> NOTAUTH'
+        when Request::RCODE_NOTZONE
+          Log.info '-> NOTZONE'
+        else
+          Log.info "-> ??? (#{e.code})"
+        end
+      end
       Log.debug e.backtrace.join("\n")
       
       res = [
