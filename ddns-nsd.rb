@@ -575,8 +575,7 @@ def update_zone_file(data)
     end
     r
   }.each do |d|
-    line = d[:name]
-    line += ' IN '
+    line = "#{d[:name]} #{d[:ttl]} IN "
     case d[:type]
     when Request::TYPE_A
       line += 'A '
