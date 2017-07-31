@@ -882,9 +882,8 @@ def try_udp
         if update.class == req.zones[0].class
           replaced = false
           data[:records].each do |rr|
-            if rr[:name] == update.name && rr[:type] == update.type
+            if rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata
               rr[:ttl] = update.ttl
-              rr[:rdata] = update.rdata
               replaced = true
             end
           end
@@ -899,12 +898,23 @@ def try_udp
           end
         end
         if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
-          # fixme: 3.4.2.3.
-          Log.debug "del1."
+          unless update.name == req.zones[0].name
+            data[:records] = data[:records].select{ |rr|
+              rr[:name] != update.name
+            }
+          end
+        end
+        if update.class == Request::CLASS_ANY && update.type != Request::TYPE_ANY
+          unless update.name == req.zones[0].name
+            data[:records] = data[:records].select{ |rr|
+              !(rr[:name] == update.name && rr[:type] == update.type)
+            }
+          end
         end
         if update.class == Request::CLASS_NONE
-          # fixme: 3.4.2.4.
-          Log.debug "del2."
+          data[:records] = data[:records].select{ |rr|
+            !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rrdata)
+          }
         end
       end
       
