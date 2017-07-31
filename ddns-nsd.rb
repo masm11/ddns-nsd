@@ -599,6 +599,7 @@ def update_zone_file(data)
       line += ' )'
     end
     
+    new_lines2 << "; #{Time.at(d[:timestamp]).to_s}"
     new_lines2 << line
   end
   
@@ -636,7 +637,7 @@ def update_zone_file(data)
         end
         f.puts l
       end
-      f.puts "; DDNS-NSD: --- DON'T EDIT MANUALLY BELOW THIS LINE. ---"
+      f.puts "; DDNS-NSD: --- DON'T EDIT BELOW THIS LINE MANUALLY. ---"
       new_lines2.each do |l|
         f.puts l
       end
@@ -718,6 +719,12 @@ def load_data(config)
     raise "Zone file does not exist: #{data[:file]}" unless File.exists?(data[:file])
   end
   
+  @data.each do |data|
+    data[:records].each do |rr|
+      rr[:timestamp] ||= Time.now.to_i
+    end
+  end
+  
   save_data
 end
 
@@ -735,6 +742,8 @@ def try_udp
     tsig = nil
     
     begin
+      now = Time.now.to_i
+      
       req = Request.new(data)
       
       # check TSIG.
@@ -883,6 +892,7 @@ def try_udp
           data[:records].each do |rr|
             if rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata
               rr[:ttl] = update.ttl
+              rr[:timestamp] = now
               replaced = true
             end
           end
@@ -892,6 +902,7 @@ def try_udp
               type: update.type,
               ttl: update.ttl,
               rdata: update.rdata,
+              timestamp: now,
             }
             data[:records] << rr
           end
