@@ -660,7 +660,7 @@ def update_zone_files
   
   if need_reload
     Log.debug('reloading nsd.')
-    unless system('systemctl reload nsd')
+    unless system(@restart_nsd)
       raise "Failed to reload nsd."
     end
   end
@@ -685,6 +685,8 @@ def load_data(config)
   @keys = conf['keys']
   raise 'No keys in config.' unless @keys
   raise 'keys must be an array.' unless @keys.is_a?(Array)
+  @restart_nsd = conf['restart_nsd']
+  raise 'No restart_nsd in config.' unless @restart_nsd
   
   zones = conf['zones']
   raise 'No zones in config.' unless zones
