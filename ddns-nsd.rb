@@ -802,11 +802,35 @@ def try_udp
           unless prereq.ttl == 0
             raise Ex.new(Request::RCODE_FORMERR, 'prereq: 7.')
           end
-          if data[:records].select{ |d|
-               d[:name] == prereq.name && d[:type] == prereq.type && d[:rdata] == prereq.rdata
-             }.length == 0
+          prereq_rrset = req.prerequisites.select{ |p|
+            p.class == req.zones[0].class &&
+              p.name == prereq.name &&
+              p.type == prereq.type
+          }.sort{ |a, b|
+            a.rdata <=> b.rdata
+          }
+          zone_rrset = data[:records].select{ |d|
+            d[:name] == prereq.name && d[:type] == prereq.type
+          }.sort{ |a, b|
+            a.rdata <=> b.rdata
+          }
+          unless prereq_rrset.length == zone_rrset.length
             raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 8.')
           end
+          prereq_rrset.length.times do |i|
+            p = prereq_rrset[i]
+            d = zone_rrset[i]
+            # ttl は比較しない。
+            unless p.rdata == d[:rdata]
+              raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 9.')
+            end
+          end
+        end
+      end
+      
+      req.prerequisites.each do |prereq|
+        if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
+          raise Ex.new(Request::RCODE_FORMERR, 'prereq: 10.')
         end
       end
       
