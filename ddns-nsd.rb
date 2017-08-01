@@ -555,7 +555,7 @@ end
 
 def update_zone_file(data)
   Log.debug('update_zone_file')
-  lines2 = File.readlines(data[:file])
+  lines2 = File.readlines(data[:file]).map{ |s| s.sub(/\n\z/, '') }
   lines1 = []
   while lines2.length >= 1
     line = lines2.shift
@@ -599,26 +599,50 @@ def update_zone_file(data)
       line += ' )'
     end
     
-    new_lines2 << "; #{Time.at(d[:timestamp]).to_s}"
-    new_lines2 << line
+    new_lines2 << "; #{Time.at(d[:timestamp]).to_s}".force_encoding('US-ASCII')
+    new_lines2 << line.force_encoding('US-ASCII')
   end
   
-  eq = true
+  eq = true              # ファイル内容が完全に同じかどうか
+  need_reload = false    # コメント以外に違う箇所があるかどうか。serial が増え、nsd が reload される。
   if lines2.length != new_lines2.length
+    # Log.debug("line count changed. #{lines2.length}->#{new_lines2.length}")
     eq = false
+    need_reload = true
   else
+    # Log.debug("line count is not changed.")
     lines2.length.times do |i|
-      eq = false if lines2[i] != new_lines2[i]
+      # Log.debug("line#{'%02d' % i}: cls - #{lines2[i].class}")
+      # Log.debug("line#{'%02d' % i}: cls + #{new_lines2[i].class}")
+      # Log.debug("line#{'%02d' % i}: enc - #{lines2[i].encoding}")
+      # Log.debug("line#{'%02d' % i}: enc + #{new_lines2[i].encoding}")
+      # Log.debug("line#{'%02d' % i}: - #{lines2[i]}")
+      # Log.debug("line#{'%02d' % i}: + #{new_lines2[i]}")
+      # Log.debug("line#{'%02d' % i}: code - #{lines2[i].unpack('C*')}")
+      # Log.debug("line#{'%02d' % i}: code + #{new_lines2[i].unpack('C*')}")
+      if lines2[i] =~ /\A;/ && new_lines2[i] =~ /\A;/
+        # Log.debug('both are comments. ignored.')
+        # コメントが書き換わっただけで serial を増やすのは無駄。
+        # でもファイルとしては書き換わってる。
+        eq = false
+        next
+      end
+      if lines2[i] != new_lines2[i]
+        # Log.debug('differ.')
+        eq = false
+        need_reload = true
+      end
     end
   end
   if eq
     Log.info("zone file #{data[:file]} not changed.")
-    false
   else
     Log.info("zone file #{data[:file]} differ.")
-    File.open("#{data[:file]}.new", 'w', 0666) do |f|
+    now = Time.now.localtime
+    stamp = "#{now.strftime('%Y%m%d.%H%M%S')}.#{'%06d' % now.usec}"
+    File.open("#{data[:file]}.new.#{stamp}", 'w', 0666) do |f|
       lines1.each do |l|
-        if l =~ /(\d+).+DDNS-NSD-SERIAL/
+        if need_reload && l =~ /(\d+).+DDNS-NSD-SERIAL/
           date = Time.now.localtime.strftime('%Y%m%d')
           cur_serial = $1
           if cur_serial =~ /^#{date}(\d+)/
@@ -642,10 +666,11 @@ def update_zone_file(data)
         f.puts l
       end
     end
+    File.link("#{data[:file]}.new.#{stamp}", "#{data[:file]}.new")
     File.rename("#{data[:file]}.new", "#{data[:file]}")
     Log.debug('update done.')
-    true
   end
+  need_reload
 end
 
 def update_zone_files
@@ -954,21 +979,21 @@ def try_udp
       Log.debug "OK."
       
     rescue => e
-      Log.info e.to_s
       if e.is_a?(Ex)
+        Log.info e.to_s
         case e.code
         when Request::RCODE_NOERROR
           Log.info '-> NOERROR'
         when Request::RCODE_FORMERR
-          Log.info '-> FORMERR'
+          Log.err '-> FORMERR'
         when Request::RCODE_SERVFAIL
-          Log.info '-> SERVFAIL'
+          Log.err '-> SERVFAIL'
         when Request::RCODE_NXDOMAIN
           Log.info '-> NXDOMAIN'
         when Request::RCODE_NOTIMP
-          Log.info '-> NOTIMP'
+          Log.err '-> NOTIMP'
         when Request::RCODE_REFUSED
-          Log.info '-> REFUSED'
+          Log.err '-> REFUSED'
         when Request::RCODE_YXDOMAIN
           Log.info '-> YXDOMAIN'
         when Request::RCODE_YXRRSET
@@ -976,14 +1001,17 @@ def try_udp
         when Request::RCODE_NXRRSET
           Log.info '-> NXRRSET'
         when Request::RCODE_NOTAUTH
-          Log.info '-> NOTAUTH'
+          Log.err '-> NOTAUTH'
         when Request::RCODE_NOTZONE
-          Log.info '-> NOTZONE'
+          Log.err '-> NOTZONE'
         else
-          Log.info "-> ??? (#{e.code})"
+          Log.err "-> ??? (#{e.code})"
         end
+        Log.debug e.backtrace.join("\n")
+      else
+        Log.err e.to_s
+        Log.err e.backtrace.join("\n")
       end
-      Log.debug e.backtrace.join("\n")
       
       res = [
         (req.id >> 8) & 0xff, req.id & 0xff,
