@@ -925,7 +925,7 @@ def try_udp
         end
         if update.class == Request::CLASS_NONE
           data[:records] = data[:records].select{ |rr|
-            !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rrdata)
+            !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata)
           }
         end
       end
