@@ -676,17 +676,9 @@ end
 def update_zone_files
   Log.debug('update_zone_files')
   
-  need_reload = false
   @data.each do |data|
     if update_zone_file(data)
-      need_reload = true
-    end
-  end
-  
-  if need_reload
-    Log.debug('reloading nsd.')
-    unless system(@restart_nsd)
-      raise "Failed to reload nsd."
+      @need_reload = true
     end
   end
 end
@@ -762,6 +754,21 @@ def try_udp
   
   while true
     Log.debug "udp: recving..."
+    while true
+      # nsd を reload する必要があるなら、timeout を 1秒に設定。
+      # 1秒間に何も来ずに timeout すれば、reload する。
+      # 1秒の間に何か来たら、それを処理し、またその後 1秒待つ。
+      rs, ws = IO.select([sock], [], [], @need_reload ? 1 : nil)
+      break if rs
+
+      Log.info('reloading nsd.')
+      unless system(@restart_nsd)
+        Log.error "Failed to reload nsd."
+      else
+        @need_reload = false
+      end
+    end
+
     data, sa = sock.recvfrom(65536)
     data = data.unpack('C*')   # ASCII-8BIT
     Log.debug 'UDP:'
