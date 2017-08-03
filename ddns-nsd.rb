@@ -672,7 +672,7 @@ def update_zone_file(data)
         end
         f.puts l
       end
-      f.puts "; DDNS-NSD: --- DON'T EDIT BELOW THIS LINE MANUALLY. ---"
+      f.puts "; DDNS-NSD: --- DON'T EDIT THIS LINE AND BELOW MANUALLY. ---"
       new_lines2.each do |l|
         f.puts l
       end
