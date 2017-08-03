@@ -181,7 +181,7 @@ type は A, AAAA, PTR, DHCID に対応しています。
 
 ## ライセンス
 
-GPLv3 とします。
+GPLv3 とします。COPYING を参照してください。
 
 ## 作者
 
