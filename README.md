@@ -174,6 +174,11 @@ nmcli con modify <ネットワーク名> <項目名> <値>
 nmcli con modify example-wifi ipv6.dhcp-hostname my.example.com
 ```
 
+## 対応状況
+
+class は IN のみ対応しています。
+type は A, AAAA, PTR, DHCID に対応しています。
+
 ## ライセンス
 
 GPLv3 とします。
