@@ -124,6 +124,14 @@ module Base
     print "\n" unless len % 16 == 0
   end
   
+  def alter_dhcid_rdata!(rdata)
+    if rdata.length >= 2
+      if rdata[0] == 0x00 && rdata[1] == 0x02
+        rdata[1] = 0x01
+      end
+    end
+  end
+
   def read_2(data, i)
     [ data[i] << 8 | data[i + 1], i + 2 ]
   end
@@ -229,6 +237,7 @@ class Request
       @ttl, i = read_4(data, i)
       rdlength, i = read_2(data, i)
       @rdata = data[i ... i + rdlength]
+      alter_dhcid_rdata!(@rdata) if @type == Request::TYPE_DHCID
       i += rdlength
       
       Log.debug "  name=#{@name}"
@@ -276,6 +285,7 @@ class Request
       @ttl, i = read_4(data, i)
       rdlength, i = read_2(data, i)
       @rdata = data[i...i + rdlength]
+      alter_dhcid_rdata!(@rdata) if @type == Request::TYPE_DHCID
       i += rdlength
       
       Log.debug "  name=#{@name}"
@@ -316,6 +326,7 @@ class Request
       @ttl, i = read_4(data, i)
       rdlength, i = read_2(data, i)
       @rdata = data[i...i + rdlength]
+      alter_dhcid_rdata!(@rdata) if @type == Request::TYPE_DHCID
       i += rdlength
       
       Log.debug "  name=#{@name}"
