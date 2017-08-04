@@ -823,16 +823,16 @@ def try_udp
         # check zone.
 
         if req.zones.length != 1
-          raise Ex.new(Request::RCODE_FORMERR, 'zone count is not 1.')
+          raise Ex.new(Request::RCODE_FORMERR, 'Zone count is not 1.')
         end
         if req.zones[0].type != Request::TYPE_SOA
-          raise Ex.new(Request::RCODE_FORMERR, 'zone is not SOA.')
+          raise Ex.new(Request::RCODE_FORMERR, "Zone's type isn't SOA.")
         end
         data_alter = @data.dup
         Log.info "zone: #{req.zones[0].name}"
         data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
         unless data
-          raise Ex.new(Request::RCODE_NOTAUTH, 'unknown zone name.')
+          raise Ex.new(Request::RCODE_NOTAUTH, "Zone's name is unknown.")
         end
 
         # check prerequisites.
@@ -840,17 +840,17 @@ def try_udp
         req.prerequisites.each do |prereq|
           if prereq.class == Request::CLASS_ANY
             unless prereq.ttl == 0 && prereq.rdata.length == 0
-              raise Ex.new(Request::RCODE_FORMERR, 'prereq 1.')
+              raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is ANY, but TTL isn't 0 or rdata isn't empty.")
             end
             if prereq.type == Request::TYPE_ANY
               if data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
-                raise Ex.new(Request::RCODE_NXDOMAIN, 'prereq: 2.')
+                raise Ex.new(Request::RCODE_NXDOMAIN, "Prereq's class is ANY, and type is ANY, but no such name RR exists.")
               end
             else
               if data[:records].select{ |rr|
                    rr[:name] == prereq.name && rr[:type] == prereq.type
                  }.length == 0
-                raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 3.')
+                raise Ex.new(Request::RCODE_NXRRSET, "Prereq's class is ANY, and type isn't ANY, but no such name and type RR exists.")
               end
             end
           end
@@ -859,18 +859,18 @@ def try_udp
         req.prerequisites.each do |prereq|
           if prereq.class == Request::CLASS_NONE
             unless prereq.ttl == 0 && prereq.rdata.length == 0
-              raise Ex.new(Request::RCODE_FORMERR, 'prereq 4.')
+              raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is NONE, but TTL isn't 0 or rdata isn't empty.")
             end
 
             if prereq.type == Request::TYPE_ANY
               unless data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
-                raise Ex.new(Request::RCODE_YXDOMAIN, 'prereq: 5.')
+                raise Ex.new(Request::RCODE_YXDOMAIN, "Prereq's class is NONE, and type is ANY, but such a name RR exists.")
               end
             else
               unless data[:records].select{ |rr|
                        rr[:name] == prereq.name && rr[:type] == prereq.type
                      }.length == 0
-                raise Ex.new(Request::RCODE_YXRRSET, 'prereq: 6.')
+                raise Ex.new(Request::RCODE_YXRRSET, "Prereq's class is NONE, and type isn't ANY, but such a name and type RR exists.")
               end
             end
           end
@@ -879,7 +879,7 @@ def try_udp
         req.prerequisites.each do |prereq|
           if prereq.class == req.zones[0].class
             unless prereq.ttl == 0
-              raise Ex.new(Request::RCODE_FORMERR, 'prereq: 7.')
+              raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is zone's class, but TTL isn't 0.")
             end
             prereq_rrset = req.prerequisites.select{ |p|
               p.class == req.zones[0].class &&
@@ -894,14 +894,14 @@ def try_udp
               a.rdata <=> b.rdata
             }
             unless prereq_rrset.length == zone_rrset.length
-              raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 8.')
+              raise Ex.new(Request::RCODE_NXRRSET, "Prereq's class is zone's class, but RRset not match(len).")
             end
             prereq_rrset.length.times do |i|
               p = prereq_rrset[i]
               d = zone_rrset[i]
               # ttl は比較しない。
               unless p.rdata == d[:rdata]
-                raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 9.')
+                raise Ex.new(Request::RCODE_NXRRSET, "Prereq's class is zone's class, but RRset not match(rdata).")
               end
             end
           end
@@ -909,7 +909,7 @@ def try_udp
 
         req.prerequisites.each do |prereq|
           if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
-            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 10.')
+            raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is unknown.")
           end
         end
 
@@ -917,10 +917,10 @@ def try_udp
 
         req.updates.each do |update|
           unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
-            raise Ex.new(Request::RCODE_FORMERR, 'update: 1.')
+            raise Ex.new(Request::RCODE_FORMERR, "Update's class is neigther zone's class, ANY, nor NONE.")
           end
           unless update.name.end_with?(req.zones[0].name)
-            raise Ex.new(Request::RCODE_NOTZONE, 'update: 2.')
+            raise Ex.new(Request::RCODE_NOTZONE, "Update's name doesn't match with zone's name.")
           end
         end
 
@@ -933,17 +933,17 @@ def try_udp
             when Request::TYPE_DHCID
             else
               Log.debug "type=#{update.type}"
-              raise Ex.new(Request::RCODE_FORMERR, 'update: 3.')
+              raise Ex.new(Request::RCODE_FORMERR, "Update's class isn't ANY, but type is unknown.")
             end
           end
           if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
             unless update.ttl == 0
-              raise Ex.new(Request::RCODE_FORMERR, 'update: 4.')
+              raise Ex.new(Request::RCODE_FORMERR, "Update's class is ANY or NONE, but TTL isn't 0.")
             end
           end
           if update.class == Request::CLASS_ANY
             unless update.rdata.length == 0
-              raise Ex.new(Request::RCODE_FORMERR, 'update: 5.')
+              raise Ex.new(Request::RCODE_FORMERR, "Update's class is ANY, but rdata isn't empty.")
             end
             case update.type
             when Request::TYPE_A
@@ -951,7 +951,7 @@ def try_udp
             when Request::TYPE_PTR
             when Request::TYPE_DHCID
             else
-              raise Ex.new(Request::RCODE_FORMERR, 'update: 6.')
+              raise Ex.new(Request::RCODE_FORMERR, "Update's class is ANY, but type is unknown.")
             end
           end
         end
@@ -1027,29 +1027,29 @@ def try_udp
           Log.info e.to_s
           case e.code
           when Request::RCODE_NOERROR
-            Log.info '-> NOERROR'
+            Log.info "#{e.to_s} -> NOERROR"
           when Request::RCODE_FORMERR
-            Log.err '-> FORMERR'
+            Log.err "#{e.to_s} -> FORMERR"
           when Request::RCODE_SERVFAIL
-            Log.err '-> SERVFAIL'
+            Log.err "#{e.to_s} -> SERVFAIL"
           when Request::RCODE_NXDOMAIN
-            Log.info '-> NXDOMAIN'
+            Log.info "#{e.to_s} -> NXDOMAIN"
           when Request::RCODE_NOTIMP
-            Log.err '-> NOTIMP'
+            Log.err "#{e.to_s} -> NOTIMP"
           when Request::RCODE_REFUSED
-            Log.err '-> REFUSED'
+            Log.err "#{e.to_s} -> REFUSED"
           when Request::RCODE_YXDOMAIN
-            Log.info '-> YXDOMAIN'
+            Log.info "#{e.to_s} -> YXDOMAIN"
           when Request::RCODE_YXRRSET
-            Log.info '-> YXRRSET'
+            Log.info "#{e.to_s} -> YXRRSET"
           when Request::RCODE_NXRRSET
-            Log.info '-> NXRRSET'
+            Log.info "#{e.to_s} -> NXRRSET"
           when Request::RCODE_NOTAUTH
-            Log.err '-> NOTAUTH'
+            Log.err "#{e.to_s} -> NOTAUTH"
           when Request::RCODE_NOTZONE
-            Log.err '-> NOTZONE'
+            Log.err "#{e.to_s} -> NOTZONE"
           else
-            Log.err "-> ??? (#{e.code})"
+            Log.err "#{e.to_s} -> ??? (#{e.code})"
           end
           Log.debug e.backtrace.join("\n")
         else
