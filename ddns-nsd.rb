@@ -18,6 +18,7 @@
 
 require 'syslog'
 require 'socket'
+require 'resolv-replace'
 require 'base64'
 require 'openssl'
 require 'json'
@@ -725,7 +726,6 @@ def load_data(config)
   @listen = conf['listen']
   raise 'No listen in config.' unless @listen
   raise 'listen must be an array of a string.' unless @listen.is_a?(Array)
-  raise 'listen must be an array containing only one string.' unless @listen.length == 1
   @keys = conf['keys']
   raise 'No keys in config.' unless @keys
   raise 'keys must be an array.' unless @keys.is_a?(Array)
@@ -775,9 +775,18 @@ def load_data(config)
 end
 
 def try_udp
-  sock = UDPSocket.new
-  raise "Bad listen." unless @listen[0] =~ /\A([^:]+):(\d+)\z/
-  sock.bind($1, $2.to_i)
+  socks = @listen.map{ |listen|
+    if listen =~ /\A([\d.]+):(\d+)\z/
+      sock = UDPSocket.new
+      sock.bind($1, $2.to_i)
+    elsif listen =~ /\A\[([0-9A-Fa-f:]+)\]:(\d+)\z/
+      sock = UDPSocket.new(Socket::AF_INET6)
+      sock.bind($1, $2.to_i)
+    else
+      raise "Bad listen: #{listen}" unless listen =~ /\A([^:]+):(\d+)\z/
+    end
+    sock
+  }
   
   while true
     Log.debug "udp: recving..."
@@ -785,7 +794,7 @@ def try_udp
       # nsd を reload する必要があるなら、timeout を 1秒に設定。
       # 1秒間に何も来ずに timeout すれば、reload する。
       # 1秒の間に何か来たら、それを処理し、またその後 1秒待つ。
-      rs, ws = IO.select([sock], [], [], @need_reload ? 1 : nil)
+      rs, ws = IO.select(socks, [], [], @need_reload ? 1 : nil)
       break if rs
 
       Log.info('reloading nsd.')
@@ -795,274 +804,276 @@ def try_udp
         @need_reload = false
       end
     end
+    
+    rs.each do |sock|
+      data, sa = sock.recvfrom(65536)
+      data = data.unpack('C*')   # ASCII-8BIT
+      Log.debug 'UDP:'
 
-    data, sa = sock.recvfrom(65536)
-    data = data.unpack('C*')   # ASCII-8BIT
-    Log.debug 'UDP:'
-    
-    tsig = nil
-    
-    begin
-      now = Time.now.to_i
-      
-      req = Request.new(data)
-      
-      # check TSIG.
-      tsig = check_tsig(req, data)
-      
-      # check zone.
-      
-      if req.zones.length != 1
-        raise Ex.new(Request::RCODE_FORMERR, 'zone count is not 1.')
-      end
-      if req.zones[0].type != Request::TYPE_SOA
-        raise Ex.new(Request::RCODE_FORMERR, 'zone is not SOA.')
-      end
-      data_alter = @data.dup
-      Log.info "zone: #{req.zones[0].name}"
-      data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
-      unless data
-        raise Ex.new(Request::RCODE_NOTAUTH, 'unknown zone name.')
-      end
-      
-      # check prerequisites.
-      
-      req.prerequisites.each do |prereq|
-        if prereq.class == Request::CLASS_ANY
-          unless prereq.ttl == 0 && prereq.rdata.length == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'prereq 1.')
-          end
-          if prereq.type == Request::TYPE_ANY
-            if data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
-              raise Ex.new(Request::RCODE_NXDOMAIN, 'prereq: 2.')
+      tsig = nil
+
+      begin
+        now = Time.now.to_i
+
+        req = Request.new(data)
+
+        # check TSIG.
+        tsig = check_tsig(req, data)
+
+        # check zone.
+
+        if req.zones.length != 1
+          raise Ex.new(Request::RCODE_FORMERR, 'zone count is not 1.')
+        end
+        if req.zones[0].type != Request::TYPE_SOA
+          raise Ex.new(Request::RCODE_FORMERR, 'zone is not SOA.')
+        end
+        data_alter = @data.dup
+        Log.info "zone: #{req.zones[0].name}"
+        data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
+        unless data
+          raise Ex.new(Request::RCODE_NOTAUTH, 'unknown zone name.')
+        end
+
+        # check prerequisites.
+
+        req.prerequisites.each do |prereq|
+          if prereq.class == Request::CLASS_ANY
+            unless prereq.ttl == 0 && prereq.rdata.length == 0
+              raise Ex.new(Request::RCODE_FORMERR, 'prereq 1.')
             end
-          else
-            if data[:records].select{ |rr|
-                 rr[:name] == prereq.name && rr[:type] == prereq.type
-               }.length == 0
-              raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 3.')
+            if prereq.type == Request::TYPE_ANY
+              if data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
+                raise Ex.new(Request::RCODE_NXDOMAIN, 'prereq: 2.')
+              end
+            else
+              if data[:records].select{ |rr|
+                   rr[:name] == prereq.name && rr[:type] == prereq.type
+                 }.length == 0
+                raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 3.')
+              end
             end
           end
         end
-      end
-      
-      req.prerequisites.each do |prereq|
-        if prereq.class == Request::CLASS_NONE
-          unless prereq.ttl == 0 && prereq.rdata.length == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'prereq 4.')
-          end
-          
-          if prereq.type == Request::TYPE_ANY
-            unless data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
-              raise Ex.new(Request::RCODE_YXDOMAIN, 'prereq: 5.')
+
+        req.prerequisites.each do |prereq|
+          if prereq.class == Request::CLASS_NONE
+            unless prereq.ttl == 0 && prereq.rdata.length == 0
+              raise Ex.new(Request::RCODE_FORMERR, 'prereq 4.')
             end
-          else
-            unless data[:records].select{ |rr|
-                     rr[:name] == prereq.name && rr[:type] == prereq.type
-                   }.length == 0
-              raise Ex.new(Request::RCODE_YXRRSET, 'prereq: 6.')
-            end
-          end
-        end
-      end
-      
-      req.prerequisites.each do |prereq|
-        if prereq.class == req.zones[0].class
-          unless prereq.ttl == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 7.')
-          end
-          prereq_rrset = req.prerequisites.select{ |p|
-            p.class == req.zones[0].class &&
-              p.name == prereq.name &&
-              p.type == prereq.type
-          }.sort{ |a, b|
-            a.rdata <=> b.rdata
-          }
-          zone_rrset = data[:records].select{ |d|
-            d[:name] == prereq.name && d[:type] == prereq.type
-          }.sort{ |a, b|
-            a.rdata <=> b.rdata
-          }
-          unless prereq_rrset.length == zone_rrset.length
-            raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 8.')
-          end
-          prereq_rrset.length.times do |i|
-            p = prereq_rrset[i]
-            d = zone_rrset[i]
-            # ttl は比較しない。
-            unless p.rdata == d[:rdata]
-              raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 9.')
+
+            if prereq.type == Request::TYPE_ANY
+              unless data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
+                raise Ex.new(Request::RCODE_YXDOMAIN, 'prereq: 5.')
+              end
+            else
+              unless data[:records].select{ |rr|
+                       rr[:name] == prereq.name && rr[:type] == prereq.type
+                     }.length == 0
+                raise Ex.new(Request::RCODE_YXRRSET, 'prereq: 6.')
+              end
             end
           end
         end
-      end
-      
-      req.prerequisites.each do |prereq|
-        if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
-          raise Ex.new(Request::RCODE_FORMERR, 'prereq: 10.')
-        end
-      end
-      
-      # update
-      
-      req.updates.each do |update|
-        unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
-          raise Ex.new(Request::RCODE_FORMERR, 'update: 1.')
-        end
-        unless update.name.end_with?(req.zones[0].name)
-          raise Ex.new(Request::RCODE_NOTZONE, 'update: 2.')
-        end
-      end
-      
-      req.updates.each do |update|
-        if update.class != Request::CLASS_ANY
-          case update.type
-          when Request::TYPE_A
-          when Request::TYPE_AAAA
-          when Request::TYPE_PTR
-          when Request::TYPE_DHCID
-          else
-            Log.debug "type=#{update.type}"
-            raise Ex.new(Request::RCODE_FORMERR, 'update: 3.')
-          end
-        end
-        if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
-          unless update.ttl == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'update: 4.')
-          end
-        end
-        if update.class == Request::CLASS_ANY
-          unless update.rdata.length == 0
-            raise Ex.new(Request::RCODE_FORMERR, 'update: 5.')
-          end
-          case update.type
-          when Request::TYPE_A
-          when Request::TYPE_AAAA
-          when Request::TYPE_PTR
-          when Request::TYPE_DHCID
-          else
-            raise Ex.new(Request::RCODE_FORMERR, 'update: 6.')
-          end
-        end
-      end
-      
-      req.updates.each do |update|
-        Log.info "update: name: #{update.name}, type: #{update.type}, ttl: #{update.ttl}, rdata: #{update.rdata}"
-        if update.class == req.zones[0].class
-          replaced = false
-          data[:records].each do |rr|
-            if rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata
-              rr[:ttl] = update.ttl
-              rr[:timestamp] = now
-              replaced = true
+
+        req.prerequisites.each do |prereq|
+          if prereq.class == req.zones[0].class
+            unless prereq.ttl == 0
+              raise Ex.new(Request::RCODE_FORMERR, 'prereq: 7.')
             end
-          end
-          unless replaced
-            rr = {
-              name: update.name,
-              type: update.type,
-              ttl: update.ttl,
-              rdata: update.rdata,
-              timestamp: now,
+            prereq_rrset = req.prerequisites.select{ |p|
+              p.class == req.zones[0].class &&
+                p.name == prereq.name &&
+                p.type == prereq.type
+            }.sort{ |a, b|
+              a.rdata <=> b.rdata
             }
-            data[:records] << rr
+            zone_rrset = data[:records].select{ |d|
+              d[:name] == prereq.name && d[:type] == prereq.type
+            }.sort{ |a, b|
+              a.rdata <=> b.rdata
+            }
+            unless prereq_rrset.length == zone_rrset.length
+              raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 8.')
+            end
+            prereq_rrset.length.times do |i|
+              p = prereq_rrset[i]
+              d = zone_rrset[i]
+              # ttl は比較しない。
+              unless p.rdata == d[:rdata]
+                raise Ex.new(Request::RCODE_NXRRSET, 'prereq: 9.')
+              end
+            end
           end
         end
-        if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
-          unless update.name == req.zones[0].name
+
+        req.prerequisites.each do |prereq|
+          if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
+            raise Ex.new(Request::RCODE_FORMERR, 'prereq: 10.')
+          end
+        end
+
+        # update
+
+        req.updates.each do |update|
+          unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
+            raise Ex.new(Request::RCODE_FORMERR, 'update: 1.')
+          end
+          unless update.name.end_with?(req.zones[0].name)
+            raise Ex.new(Request::RCODE_NOTZONE, 'update: 2.')
+          end
+        end
+
+        req.updates.each do |update|
+          if update.class != Request::CLASS_ANY
+            case update.type
+            when Request::TYPE_A
+            when Request::TYPE_AAAA
+            when Request::TYPE_PTR
+            when Request::TYPE_DHCID
+            else
+              Log.debug "type=#{update.type}"
+              raise Ex.new(Request::RCODE_FORMERR, 'update: 3.')
+            end
+          end
+          if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
+            unless update.ttl == 0
+              raise Ex.new(Request::RCODE_FORMERR, 'update: 4.')
+            end
+          end
+          if update.class == Request::CLASS_ANY
+            unless update.rdata.length == 0
+              raise Ex.new(Request::RCODE_FORMERR, 'update: 5.')
+            end
+            case update.type
+            when Request::TYPE_A
+            when Request::TYPE_AAAA
+            when Request::TYPE_PTR
+            when Request::TYPE_DHCID
+            else
+              raise Ex.new(Request::RCODE_FORMERR, 'update: 6.')
+            end
+          end
+        end
+
+        req.updates.each do |update|
+          Log.info "update: name: #{update.name}, type: #{update.type}, ttl: #{update.ttl}, rdata: #{update.rdata}"
+          if update.class == req.zones[0].class
+            replaced = false
+            data[:records].each do |rr|
+              if rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata
+                rr[:ttl] = update.ttl
+                rr[:timestamp] = now
+                replaced = true
+              end
+            end
+            unless replaced
+              rr = {
+                name: update.name,
+                type: update.type,
+                ttl: update.ttl,
+                rdata: update.rdata,
+                timestamp: now,
+              }
+              data[:records] << rr
+            end
+          end
+          if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
+            unless update.name == req.zones[0].name
+              data[:records] = data[:records].select{ |rr|
+                rr[:name] != update.name
+              }
+            end
+          end
+          if update.class == Request::CLASS_ANY && update.type != Request::TYPE_ANY
+            unless update.name == req.zones[0].name
+              data[:records] = data[:records].select{ |rr|
+                !(rr[:name] == update.name && rr[:type] == update.type)
+              }
+            end
+          end
+          if update.class == Request::CLASS_NONE
             data[:records] = data[:records].select{ |rr|
-              rr[:name] != update.name
+              !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata)
             }
           end
         end
-        if update.class == Request::CLASS_ANY && update.type != Request::TYPE_ANY
-          unless update.name == req.zones[0].name
-            data[:records] = data[:records].select{ |rr|
-              !(rr[:name] == update.name && rr[:type] == update.type)
-            }
-          end
-        end
-        if update.class == Request::CLASS_NONE
-          data[:records] = data[:records].select{ |rr|
-            !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata)
-          }
-        end
-      end
-      
-      # response
-      
-      @data = data_alter
-      Log.debug @data
-      
-      update_zone_files
-      save_data
-      
-      res = [
-        (req.id >> 8) & 0xff, req.id & 0xff,
-        0x80 | Request::OPCODE_UPDATE << 3, 0,
-        0, 0,
-        0, 0,
-        0, 0,
-        0, 0,
-      ]
-      res = sign_tsig(res, req, tsig)
-      # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
-      sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
-      sock.send(res, 0, sa)
-      
-      Log.debug "OK."
-      
-    rescue => e
-      if e.is_a?(Ex)
-        Log.info e.to_s
-        case e.code
-        when Request::RCODE_NOERROR
-          Log.info '-> NOERROR'
-        when Request::RCODE_FORMERR
-          Log.err '-> FORMERR'
-        when Request::RCODE_SERVFAIL
-          Log.err '-> SERVFAIL'
-        when Request::RCODE_NXDOMAIN
-          Log.info '-> NXDOMAIN'
-        when Request::RCODE_NOTIMP
-          Log.err '-> NOTIMP'
-        when Request::RCODE_REFUSED
-          Log.err '-> REFUSED'
-        when Request::RCODE_YXDOMAIN
-          Log.info '-> YXDOMAIN'
-        when Request::RCODE_YXRRSET
-          Log.info '-> YXRRSET'
-        when Request::RCODE_NXRRSET
-          Log.info '-> NXRRSET'
-        when Request::RCODE_NOTAUTH
-          Log.err '-> NOTAUTH'
-        when Request::RCODE_NOTZONE
-          Log.err '-> NOTZONE'
-        else
-          Log.err "-> ??? (#{e.code})"
-        end
-        Log.debug e.backtrace.join("\n")
-      else
-        Log.err e.to_s
-        Log.err e.backtrace.join("\n")
-      end
-      
-      res = [
-        (req.id >> 8) & 0xff, req.id & 0xff,
-        0x80 | Request::OPCODE_UPDATE << 3, e.is_a?(Ex) ? e.code : Request::RCODE_SERVFAIL,
-        0, 0,
-        0, 0,
-        0, 0,
-        0, 0,
-      ]
-      if tsig
+
+        # response
+
+        @data = data_alter
+        Log.debug @data
+
+        update_zone_files
+        save_data
+
+        res = [
+          (req.id >> 8) & 0xff, req.id & 0xff,
+          0x80 | Request::OPCODE_UPDATE << 3, 0,
+          0, 0,
+          0, 0,
+          0, 0,
+          0, 0,
+        ]
         res = sign_tsig(res, req, tsig)
-      else
-        res = res.pack('C*')
+        # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
+        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
+        sock.send(res, 0, sa)
+
+        Log.debug "OK."
+
+      rescue => e
+        if e.is_a?(Ex)
+          Log.info e.to_s
+          case e.code
+          when Request::RCODE_NOERROR
+            Log.info '-> NOERROR'
+          when Request::RCODE_FORMERR
+            Log.err '-> FORMERR'
+          when Request::RCODE_SERVFAIL
+            Log.err '-> SERVFAIL'
+          when Request::RCODE_NXDOMAIN
+            Log.info '-> NXDOMAIN'
+          when Request::RCODE_NOTIMP
+            Log.err '-> NOTIMP'
+          when Request::RCODE_REFUSED
+            Log.err '-> REFUSED'
+          when Request::RCODE_YXDOMAIN
+            Log.info '-> YXDOMAIN'
+          when Request::RCODE_YXRRSET
+            Log.info '-> YXRRSET'
+          when Request::RCODE_NXRRSET
+            Log.info '-> NXRRSET'
+          when Request::RCODE_NOTAUTH
+            Log.err '-> NOTAUTH'
+          when Request::RCODE_NOTZONE
+            Log.err '-> NOTZONE'
+          else
+            Log.err "-> ??? (#{e.code})"
+          end
+          Log.debug e.backtrace.join("\n")
+        else
+          Log.err e.to_s
+          Log.err e.backtrace.join("\n")
+        end
+
+        res = [
+          (req.id >> 8) & 0xff, req.id & 0xff,
+          0x80 | Request::OPCODE_UPDATE << 3, e.is_a?(Ex) ? e.code : Request::RCODE_SERVFAIL,
+          0, 0,
+          0, 0,
+          0, 0,
+          0, 0,
+        ]
+        if tsig
+          res = sign_tsig(res, req, tsig)
+        else
+          res = res.pack('C*')
+        end
+        # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
+        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
+        sock.send(res, 0, sa)
       end
-      # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
-      sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
-      sock.send(res, 0, sa)
     end
     
   end
