@@ -712,7 +712,7 @@ def update_zone_files
 end
 
 def save_data
-  json = JSON.generate(@data)
+  json = JSON.pretty_generate(@data)
   File.open(@json_filename, 'w', 0666) do |f|
     f.write(json)
   end
