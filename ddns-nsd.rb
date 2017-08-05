@@ -723,8 +723,10 @@ def update_zone_file(data)
   else
     Log.info("zone file #{data[:file]} differ.")
     now = Time.now.localtime
-    stamp = "#{now.strftime('%Y%m%d.%H%M%S')}.#{'%06d' % now.usec}"
-    File.open("#{data[:file]}.new.#{stamp}", 'w', 0666) do |f|
+    new_file = "#{data[:file]}.new"
+    history_file = "#{data[:file]}.new.#{now.strftime('%Y%m%d.%H%M%S')}.#{'%06d' % now.usec}"
+    history_file = "#{@history}/#{history_file.gsub(/\//, ':')}"
+    File.open(history_file, 'w', 0666) do |f|
       lines1.each do |l|
         if need_reload && l =~ /(\d+).+DDNS-NSD-SERIAL/
           date = Time.now.localtime.strftime('%Y%m%d')
@@ -750,8 +752,8 @@ def update_zone_file(data)
         f.puts l
       end
     end
-    File.link("#{data[:file]}.new.#{stamp}", "#{data[:file]}.new")
-    File.rename("#{data[:file]}.new", "#{data[:file]}")
+    File.link(history_file, new_file)
+    File.rename(new_file, "#{data[:file]}")
     Log.debug('update done.')
   end
   need_reload
@@ -787,6 +789,9 @@ def load_data(config)
   raise 'keys must be an array.' unless @keys.is_a?(Array)
   @restart_nsd = conf['restart_nsd']
   raise 'No restart_nsd in config.' unless @restart_nsd
+  @history = conf['history']
+  raise 'No history in config.' unless @history
+  Dir.mkdir(@history) unless Dir.exist?(@history)
   
   zones = conf['zones']
   raise 'No zones in config.' unless zones
