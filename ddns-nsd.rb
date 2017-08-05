@@ -535,14 +535,14 @@ def check_tsig(req, data)
   unless req.additionals.count{ |rr| rr.type == Request::TYPE_TSIG } == 1
     # TSIG RR が複数あるらしい
     Log.err 'Multiple TSIG.'
-    raise FormErr.new('multiple TSIG.')
+    raise FormErr.new('Multiple TSIG RR.')
   end
   
   tsig = TSIG.new(req.additionals.last.rdata)
   now = Time.now.to_i
   unless now >= tsig.time && now < tsig.time + tsig.fudge
     Log.err 'TSIG bad time.'
-    raise NotAuth.new('tsig badtime.')
+    raise NotAuth.new('TSIG RR badtime.')
   end
   
   raw = data[0 ... req.additionals.last.start_pos]
@@ -577,7 +577,7 @@ def check_tsig(req, data)
   Log.debug "#{tsig.mac}"
   unless hmac.digest == tsig.mac.pack('C*')
     Log.err 'TSIG signature not match.'
-    raise NotAuth.new('TSIG: bad sig.')
+    raise NotAuth.new('Bad TSIG signagure.')
   end
   
   tsig
@@ -885,51 +885,59 @@ def try_udp
         Log.info "zone: #{req.zones[0].name}"
         data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
         unless data
-          raise NotAuth.new("Zone's name is unknown.")
+          raise NotAuth.new("Zone's name is unknown: '#{dat[:name]}'")
         end
 
         # check prerequisites.
 
         req.prerequisites.each do |prereq|
           if prereq.class == Request::CLASS_ANY
-            unless prereq.ttl == 0 && prereq.rdata.length == 0
-              raise FormErr.new("Prereq's class is ANY, but TTL isn't 0 or rdata isn't empty.")
+            unless prereq.ttl == 0
+              raise FormErr.new("Bad prereq: TTL != 0.")
             end
+            unless prereq.rdata.length == 0
+              raise FormErr.new("Bad prereq: rdata not empty.")
+            end
+            
             if prereq.type == Request::TYPE_ANY
               unless data[:records].any?{ |rr| rr[:name] == prereq.name }
-                raise NxDomain.new("Prereq's class is ANY, and type is ANY, but no such name RR exists.")
+                raise NxDomain.new("Prereq not satisfied: No such named RR exists: '#{prereq.name}'")
               end
             else
               unless data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
-                raise NxRRSet.new("Prereq's class is ANY, and type isn't ANY, but no such name and type RR exists.")
+                raise NxRRSet.new("Prereq not satisfied: No such named and typed RR exists: '#{prereq.name}', #{prereq.type}")
               end
             end
           end
         end
-
+        
         req.prerequisites.each do |prereq|
           if prereq.class == Request::CLASS_NONE
-            unless prereq.ttl == 0 && prereq.rdata.length == 0
-              raise FormErr.new("Prereq's class is NONE, but TTL isn't 0 or rdata isn't empty.")
+            unless prereq.ttl == 0
+              raise FormErr.new("Bad prereq: TTL != 0..")
             end
-
+            unless prereq.rdata.length == 0
+              raise FormErr.new("Bad prereq: rdata not empty.")
+            end
+            
             if prereq.type == Request::TYPE_ANY
               if data[:records].any?{ |rr| rr[:name] == prereq.name }
-                raise YxDomain.new("Prereq's class is NONE, and type is ANY, but such a name RR exists.")
+                raise YxDomain.new("Prereq not satisfied: Such a named RR exists: '#{prereq.name}'")
               end
             else
               if data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
-                raise YxRRSet.new("Prereq's class is NONE, and type isn't ANY, but such a name and type RR exists.")
+                raise YxRRSet.new("Prereq not satisfied: Such a named and typed RR exists: '#{prereq.name}', #{prereq.type}")
               end
             end
           end
         end
-
+        
         req.prerequisites.each do |prereq|
           if prereq.class == req.zones[0].class
             unless prereq.ttl == 0
-              raise FormErr.new("Prereq's class is zone's class, but TTL isn't 0.")
+              raise FormErr.new("Bad prereq: TTL != 0.")
             end
+            
             prereq_rrset = req.prerequisites.select{ |p|
               p.class == req.zones[0].class &&
                 p.name == prereq.name &&
@@ -943,14 +951,14 @@ def try_udp
               a.rdata <=> b.rdata
             }
             unless prereq_rrset.length == zone_rrset.length
-              raise NxRRSet.new("Prereq's class is zone's class, but RRset not match(len).")
+              raise NxRRSet.new("Prereq not satisfied: RRset not match.")
             end
             prereq_rrset.length.times do |i|
               p = prereq_rrset[i]
               d = zone_rrset[i]
               # ttl は比較しない。
               unless p.rdata == d[:rdata]
-                raise NxRRSet.new("Prereq's class is zone's class, but RRset not match(rdata).")
+                raise NxRRSet.new("Prereq not satisfied: RRset not match.")
               end
             end
           end
@@ -958,7 +966,7 @@ def try_udp
 
         req.prerequisites.each do |prereq|
           if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
-            raise FormErr.new("Prereq's class is unknown.")
+            raise FormErr.new("Bad prereq: class unknown.")
           end
         end
 
@@ -966,10 +974,10 @@ def try_udp
 
         req.updates.each do |update|
           unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
-            raise FormErr.new("Update's class is neigther zone's class, ANY, nor NONE.")
+            raise FormErr.new("Bad update: class is neigther zone's class, ANY, nor NONE.")
           end
           unless update.name.end_with?(req.zones[0].name)
-            raise NotZone.new("Update's name doesn't match with zone's name.")
+            raise NotZone.new("Bad update: name not match with zone's name.")
           end
         end
 
@@ -981,18 +989,17 @@ def try_udp
             when Request::TYPE_PTR
             when Request::TYPE_DHCID
             else
-              Log.debug "type=#{update.type}"
-              raise FormErr.new("Update's class isn't ANY, but type is unknown.")
+              raise FormErr.new("Bad update: unknown type: #{update.type}.")
             end
           end
           if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
             unless update.ttl == 0
-              raise FormErr.new("Update's class is ANY or NONE, but TTL isn't 0.")
+              raise FormErr.new("Bad update: TTL != 0.")
             end
           end
           if update.class == Request::CLASS_ANY
             unless update.rdata.length == 0
-              raise FormErr.new("Update's class is ANY, but rdata isn't empty.")
+              raise FormErr.new("Bad update: rdata not empty.")
             end
             case update.type
             when Request::TYPE_A
@@ -1000,7 +1007,7 @@ def try_udp
             when Request::TYPE_PTR
             when Request::TYPE_DHCID
             else
-              raise FormErr.new("Update's class is ANY, but type is unknown.")
+              raise FormErr.new("Bad update: unknown type: #{update.type}")
             end
           end
         end
