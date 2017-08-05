@@ -104,7 +104,7 @@ end
 
 class String
   def to_wire_format
-    split('.').map{ |p| [p.length].pack('C') + p }.join('') + "\0"
+    downcase.split('.').map{ |p| [p.length].pack('C') + p }.join('') + "\0"
   end
 end
 
@@ -625,7 +625,7 @@ def sign_tsig(res, req, tsig)
     res[11] += 1
   end
   
-  # TSIG RR を作る
+  # TSIG RR を付ける。
   [
     res.pack('C*'),                  # 署名すべき返答パケット
     tsig.my_keyname.to_wire_format,  # name (key name)
