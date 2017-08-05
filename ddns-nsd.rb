@@ -479,7 +479,7 @@ def check_tsig(req, data)
     Log.err "Last additional RR is not TSIG."
   end
   
-  unless req.additionals.select{ |rr| rr.type == Request::TYPE_TSIG }.length == 1
+  unless req.additionals.count{ |rr| rr.type == Request::TYPE_TSIG } == 1
     # TSIG RR が複数あるらしい
     Log.err 'Multiple TSIG.'
     raise Ex.new(Request::RCODE_FORMERR, 'multiple TSIG.')
@@ -843,13 +843,11 @@ def try_udp
               raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is ANY, but TTL isn't 0 or rdata isn't empty.")
             end
             if prereq.type == Request::TYPE_ANY
-              if data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
+              unless data[:records].any?{ |rr| rr[:name] == prereq.name }
                 raise Ex.new(Request::RCODE_NXDOMAIN, "Prereq's class is ANY, and type is ANY, but no such name RR exists.")
               end
             else
-              if data[:records].select{ |rr|
-                   rr[:name] == prereq.name && rr[:type] == prereq.type
-                 }.length == 0
+              unless data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
                 raise Ex.new(Request::RCODE_NXRRSET, "Prereq's class is ANY, and type isn't ANY, but no such name and type RR exists.")
               end
             end
@@ -863,13 +861,11 @@ def try_udp
             end
 
             if prereq.type == Request::TYPE_ANY
-              unless data[:records].select{ |rr| rr[:name] == prereq.name }.length == 0
+              if data[:records].any?{ |rr| rr[:name] == prereq.name }
                 raise Ex.new(Request::RCODE_YXDOMAIN, "Prereq's class is NONE, and type is ANY, but such a name RR exists.")
               end
             else
-              unless data[:records].select{ |rr|
-                       rr[:name] == prereq.name && rr[:type] == prereq.type
-                     }.length == 0
+              if data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
                 raise Ex.new(Request::RCODE_YXRRSET, "Prereq's class is NONE, and type isn't ANY, but such a name and type RR exists.")
               end
             end
