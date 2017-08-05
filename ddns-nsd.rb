@@ -1021,17 +1021,18 @@ def try_udp
         end
 
         req.updates.each do |update|
-          Log.info "update: name: #{update.name}, type: #{update.type}, ttl: #{update.ttl}, rdata: #{update.rdata}"
           if update.class == req.zones[0].class
             replaced = false
             data[:records].each do |rr|
               if rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata
+                Log.info "Replace RR with: '#{update.name}', #{update.type}, #{update.ttl}, #{update.rdata}"
                 rr[:ttl] = update.ttl
                 rr[:timestamp] = now
                 replaced = true
               end
             end
             unless replaced
+              Log.info "Add RR: '#{update.name}', #{update.type}, #{update.ttl}, #{update.rdata}"
               rr = {
                 name: update.name,
                 type: update.type,
@@ -1044,6 +1045,7 @@ def try_udp
           end
           if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
             unless update.name == req.zones[0].name
+              Log.info "Delete name: '#{update.name}'"
               data[:records] = data[:records].select{ |rr|
                 rr[:name] != update.name
               }
@@ -1051,6 +1053,7 @@ def try_udp
           end
           if update.class == Request::CLASS_ANY && update.type != Request::TYPE_ANY
             unless update.name == req.zones[0].name
+              Log.info "Delete RRset: '#{update.name}', #{update.type}"
               data[:records] = data[:records].select{ |rr|
                 !(rr[:name] == update.name && rr[:type] == update.type)
               }
@@ -1058,6 +1061,7 @@ def try_udp
           end
           if update.class == Request::CLASS_NONE
             data[:records] = data[:records].select{ |rr|
+              Log.info "Delete RR: '#{update.name}', #{update.type}, #{update.rdata}"
               !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata)
             }
           end
