@@ -17,7 +17,7 @@ dhcpd からの動的更新リクエストを受け取って nsd の zone file
    systemctl enable ddns-nsd
    systemctl start ddns-nsd
    ```
-5. dhcpd も設定してください。ddns-update-style は standrd です。
+5. dhcpd も設定してください。ddns-update-style は standard です。
 
 ## `ddns-nsd.yml` の書き方
 
@@ -40,24 +40,35 @@ zones:
     file: /etc/nsd/168.192.in-addr.arpa.zone
   - name: 1.0.0.0.8.6.9.8.6.9.0.0.f.0.4.2.ip6.arpa.
     file: /etc/nsd/1.0.0.0.8.6.9.8.6.9.0.0.f.0.4.2.ip6.arpa.zone
+history: /etc/nsd/history
 ```
 
 - json
+
   内部状態を json 形式でファイルに保存しています。ここにはそのファイル名を指定します。
 
 - listen
+
   listen する IP アドレスと port を指定します。
+  listen と言っていますが、UDP です。
 
 - restart_nsd
+
   nsd を reload するためのコマンドを指定します。
 
 - keys
+
   TSIG に使う共有秘密鍵を指定します。dhcpd と合わせる必要があります。
   name は鍵の名前、alg は hash 値の計算方法、secret は鍵を指定します。
 
 - zones
+
   zone について記述します。
   name は zone 名、file は zone file のファイル名です。
+
+- history
+
+  ここで指定したディレクトリに zone file の履歴が保存されます。
 
 ## dhcpd と ddns-nsd との通信について
 
@@ -72,13 +83,6 @@ zones:
 
 という状態にしました。
 複数のアドレスで待ち受けできます。
-
-127.0.0.2 や ::2 を一時的に作るには、それぞれ、
-```sh
-ifconfig lo add 127.0.0.2
-ifconfig lo add ::2
-```
-でできます。
 
 ## 共有秘密鍵について
 
