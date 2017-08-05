@@ -17,6 +17,7 @@ dhcpd からの動的更新リクエストを受け取って nsd の zone file
    systemctl enable ddns-nsd
    systemctl start ddns-nsd
    ```
+5. dhcpd も設定してください。ddns-update-style は standrd です。
 
 ## `ddns-nsd.yml` の書き方
 
