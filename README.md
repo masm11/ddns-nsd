@@ -52,6 +52,9 @@ history: /etc/nsd/history
   listen する IP アドレスと port を指定します。
   listen と言っていますが、UDP です。
 
+  ddns-nsd.socket から起動する場合、この項目は不要です。
+  代わりに ddns-nsd.socket に設定してください。
+
 - restart_nsd
 
   nsd を reload するためのコマンドを指定します。
