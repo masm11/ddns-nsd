@@ -102,6 +102,12 @@ class NotZone < RCode
   end
 end
 
+class String
+  def to_wire_format
+    split('.').map{ |p| [p.length].pack('C') + p }.join('') + "\0"
+  end
+end
+
 module Base
   
   OPCODE_UPDATE = 5
@@ -214,7 +220,7 @@ module Base
     [ data[i] << 40 | data[i + 1] << 32 | data[i + 2] << 24 | data[i + 3] << 16 | data[i + 4] << 8 | data[i + 5], i + 6]
   end
   
-  def read_domainname(data, i)
+  def read_wire_format(data, i)
     name = ''
     
     while data[i] != 0
@@ -232,7 +238,7 @@ module Base
       when 0xc0
         j, i = read_2(data, i)
         j &= ~0xc000
-        return [ name + read_domainname(data, j)[0], i ]
+        return [ name + read_wire_format(data, j)[0], i ]
       end
     end
     
@@ -260,7 +266,7 @@ class Request
     def read(data, i)
       Log.debug "Zone:"
       @start_pos = i
-      @name, i = read_domainname(data, i)
+      @name, i = read_wire_format(data, i)
       Log.debug "  name=#{@name}"
       
       @type, i = read_2(data, i)
@@ -300,7 +306,7 @@ class Request
     def read(data, i)
       Log.debug "Prerequisite:"
       @start_pos = i
-      @name, i = read_domainname(data, i)
+      @name, i = read_wire_format(data, i)
       
       @type, i = read_2(data, i)
       @class, i = read_2(data, i)
@@ -348,7 +354,7 @@ class Request
     def read(data, i)
       Log.debug "Update:"
       @start_pos = i
-      @name, i = read_domainname(data, i)
+      @name, i = read_wire_format(data, i)
       
       @type, i = read_2(data, i)
       @class, i = read_2(data, i)
@@ -389,7 +395,7 @@ class Request
     def read(data, i)
       Log.debug "Additional:"
       @start_pos = i
-      @name, i = read_domainname(data, i)
+      @name, i = read_wire_format(data, i)
       
       @type, i = read_2(data, i)
       @class, i = read_2(data, i)
@@ -485,7 +491,7 @@ class TSIG
   
   def initialize(rdata)
     i = 0
-    @alg, i = read_domainname(rdata, i)
+    @alg, i = read_wire_format(rdata, i)
     @time, i = read_6(rdata, i)
     @fudge, i = read_2(rdata, i)
     mac_size, i = read_2(rdata, i)
@@ -507,6 +513,7 @@ class TSIG
   
   attr_accessor :my_alg
   attr_accessor :my_key
+  attr_accessor :my_keyname
 end
 
 def select_key(name)
@@ -554,18 +561,15 @@ def check_tsig(req, data)
   end
   raw = raw.pack('C*')
   key, alg = select_key(req.additionals.last.name)
+  tsig.my_keyname = req.additionals.last.name
   tsig.my_key = key
   tsig.my_alg = alg
   hmac = OpenSSL::HMAC.new(key, alg)
   hmac.update(raw)
-  hmac.update(req.additionals.last.name.split('.').map{ |p|
-                [p.length].pack('C') + p
-              }.join('') + "\0")
+  hmac.update(req.additionals.last.name.to_wire_format)
   hmac.update([req.additionals.last.class].pack('n'))
   hmac.update([0].pack('N'))
-  hmac.update(tsig.alg.split('.').map{ |p|
-                [p.length].pack('C') + p
-              }.join('') + "\0")
+  hmac.update(tsig.alg.to_wire_format)
   hmac.update([tsig.time >> 32].pack('n'))
   hmac.update([tsig.time].pack('N'))
   hmac.update([tsig.fudge].pack('n'))
@@ -584,19 +588,16 @@ def check_tsig(req, data)
 end
 
 def sign_tsig(res, req, tsig)
+  # 署名を計算する
   now = Time.now.to_i
   hmac = OpenSSL::HMAC.new(tsig.my_key, tsig.my_alg)
   hmac.update([tsig.mac.length].pack('n'))
   hmac.update(tsig.mac.pack('C*'))
   hmac.update(res.pack('C*'))
-  hmac.update('dhcp_updater'.split('.').map{ |p|
-                [p.length].pack('C') + p
-              }.join('') + "\0")
+  hmac.update(tsig.my_keyname.to_wire_format)
   hmac.update([Request::CLASS_ANY].pack('n'))
   hmac.update([0].pack('N'))    # TTL
-  hmac.update('hmac-md5.sig-alg.reg.int'.split('.').map{ |p|
-                [p.length].pack('C') + p
-              }.join('') + "\0")
+  hmac.update('hmac-md5.sig-alg.reg.int'.to_wire_format)
   hmac.update([now >> 32].pack('n'))
   hmac.update([now].pack('N'))
   hmac.update([300].pack('n'))  # fudge
@@ -604,8 +605,9 @@ def sign_tsig(res, req, tsig)
   hmac.update([0].pack('n'))    # other len
   digest = hmac.digest
   
+  # TSIG RR の rdata を作る
   rdata = [
-    "\x08hmac-md5\x07sig-alg\x03reg\x03int\x00",
+    "hmac-md5.sig-alg.reg.int".to_wire_format,
     [now >> 32].pack('n'),
     [now].pack('N'),
     [300].pack('n'),  # fudge
@@ -623,14 +625,15 @@ def sign_tsig(res, req, tsig)
     res[11] += 1
   end
   
+  # TSIG RR を作る
   [
-    res.pack('C*'),
-    "\x0cdhcp_updater\x00",
-    [Request::TYPE_TSIG].pack('n'),
-    [Request::CLASS_ANY].pack('n'),
-    [0].pack('N'),
-    [rdata.length].pack('n'),
-    rdata,
+    res.pack('C*'),                  # 署名すべき返答パケット
+    tsig.my_keyname.to_wire_format,  # name (key name)
+    [Request::TYPE_TSIG].pack('n'),  # type
+    [Request::CLASS_ANY].pack('n'),  # class
+    [0].pack('N'),                   # TTL
+    [rdata.length].pack('n'),        # rdlength
+    rdata,                           # rdata
   ].join('')
 end
 
