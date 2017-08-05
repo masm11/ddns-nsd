@@ -41,11 +41,64 @@ module Log
   module_function :err
 end
 
-class Ex < StandardError
+class RCode < StandardError
   attr_reader :code
-  def initialize(code, msg)
+  attr_reader :level
+  def initialize(level, code, msg)
     super(msg)
+    @level = level
     @code = code
+  end
+end
+
+class FormErr < RCode
+  def initialize(msg)
+    super(:err, Request::RCODE_FORMERR, msg)
+  end
+end
+class ServFail < RCode
+  def initialize(msg)
+    super(:err, Request::RCODE_SERVFAIL, msg)
+  end
+end
+class NxDomain < RCode
+  def initialize(msg)
+    super(:info, Request::RCODE_NXDOMAIN, msg)
+  end
+end
+class NotImp < RCode
+  def initialize(msg)
+    super(:err, Request::RCODE_NOTIMP, msg)
+  end
+end
+class Refused < RCode
+  def initialize(msg)
+    super(:err, Request::RCODE_REFUSED, msg)
+  end
+end
+class YxDomain < RCode
+  def initialize(msg)
+    super(:info, Request::RCODE_YXDOMAIN, msg)
+  end
+end
+class YxRRSet < RCode
+  def initialize(msg)
+    super(:info, Request::RCODE_YXRRSET, msg)
+  end
+end
+class NxRRSet < RCode
+  def initialize(msg)
+    super(:info, Request::RCODE_NXRRSET, msg)
+  end
+end
+class NotAuth < RCode
+  def initialize(msg)
+    super(:err, Request::RCODE_NOTAUTH, msg)
+  end
+end
+class NotZone < RCode
+  def initialize(msg)
+    super(:err, Request::RCODE_NOTZONE, msg)
   end
 end
 
@@ -468,7 +521,7 @@ def select_key(name)
     end
   end
   
-  raise Ex.new(Request::RCODE_NOTAUTH, "Unknown key: #{name}")
+  raise NotAuth.new("Unknown key: #{name}")
 end
 
 def check_tsig(req, data)
@@ -482,14 +535,14 @@ def check_tsig(req, data)
   unless req.additionals.count{ |rr| rr.type == Request::TYPE_TSIG } == 1
     # TSIG RR が複数あるらしい
     Log.err 'Multiple TSIG.'
-    raise Ex.new(Request::RCODE_FORMERR, 'multiple TSIG.')
+    raise FormErr.new('multiple TSIG.')
   end
   
   tsig = TSIG.new(req.additionals.last.rdata)
   now = Time.now.to_i
   unless now >= tsig.time && now < tsig.time + tsig.fudge
     Log.err 'TSIG bad time.'
-    raise Ex.new(Request::RCODE_NOTAUTH, 'tsig badtime.')
+    raise NotAuth.new('tsig badtime.')
   end
   
   raw = data[0 ... req.additionals.last.start_pos]
@@ -524,7 +577,7 @@ def check_tsig(req, data)
   Log.debug "#{tsig.mac}"
   unless hmac.digest == tsig.mac.pack('C*')
     Log.err 'TSIG signature not match.'
-    raise Ex.new(Request::RCODE_NOTAUTH, 'TSIG: bad sig.')
+    raise NotAuth.new('TSIG: bad sig.')
   end
   
   tsig
@@ -823,16 +876,16 @@ def try_udp
         # check zone.
 
         if req.zones.length != 1
-          raise Ex.new(Request::RCODE_FORMERR, 'Zone count is not 1.')
+          raise FormErr.new('Zone count is not 1.')
         end
         if req.zones[0].type != Request::TYPE_SOA
-          raise Ex.new(Request::RCODE_FORMERR, "Zone's type isn't SOA.")
+          raise FormErr.new("Zone's type isn't SOA.")
         end
         data_alter = @data.dup
         Log.info "zone: #{req.zones[0].name}"
         data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
         unless data
-          raise Ex.new(Request::RCODE_NOTAUTH, "Zone's name is unknown.")
+          raise NotAuth.new("Zone's name is unknown.")
         end
 
         # check prerequisites.
@@ -840,15 +893,15 @@ def try_udp
         req.prerequisites.each do |prereq|
           if prereq.class == Request::CLASS_ANY
             unless prereq.ttl == 0 && prereq.rdata.length == 0
-              raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is ANY, but TTL isn't 0 or rdata isn't empty.")
+              raise FormErr.new("Prereq's class is ANY, but TTL isn't 0 or rdata isn't empty.")
             end
             if prereq.type == Request::TYPE_ANY
               unless data[:records].any?{ |rr| rr[:name] == prereq.name }
-                raise Ex.new(Request::RCODE_NXDOMAIN, "Prereq's class is ANY, and type is ANY, but no such name RR exists.")
+                raise NxDomain.new("Prereq's class is ANY, and type is ANY, but no such name RR exists.")
               end
             else
               unless data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
-                raise Ex.new(Request::RCODE_NXRRSET, "Prereq's class is ANY, and type isn't ANY, but no such name and type RR exists.")
+                raise NxRRSet.new("Prereq's class is ANY, and type isn't ANY, but no such name and type RR exists.")
               end
             end
           end
@@ -857,16 +910,16 @@ def try_udp
         req.prerequisites.each do |prereq|
           if prereq.class == Request::CLASS_NONE
             unless prereq.ttl == 0 && prereq.rdata.length == 0
-              raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is NONE, but TTL isn't 0 or rdata isn't empty.")
+              raise FormErr.new("Prereq's class is NONE, but TTL isn't 0 or rdata isn't empty.")
             end
 
             if prereq.type == Request::TYPE_ANY
               if data[:records].any?{ |rr| rr[:name] == prereq.name }
-                raise Ex.new(Request::RCODE_YXDOMAIN, "Prereq's class is NONE, and type is ANY, but such a name RR exists.")
+                raise YxDomain.new("Prereq's class is NONE, and type is ANY, but such a name RR exists.")
               end
             else
               if data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
-                raise Ex.new(Request::RCODE_YXRRSET, "Prereq's class is NONE, and type isn't ANY, but such a name and type RR exists.")
+                raise YxRRSet.new("Prereq's class is NONE, and type isn't ANY, but such a name and type RR exists.")
               end
             end
           end
@@ -875,7 +928,7 @@ def try_udp
         req.prerequisites.each do |prereq|
           if prereq.class == req.zones[0].class
             unless prereq.ttl == 0
-              raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is zone's class, but TTL isn't 0.")
+              raise FormErr.new("Prereq's class is zone's class, but TTL isn't 0.")
             end
             prereq_rrset = req.prerequisites.select{ |p|
               p.class == req.zones[0].class &&
@@ -890,14 +943,14 @@ def try_udp
               a.rdata <=> b.rdata
             }
             unless prereq_rrset.length == zone_rrset.length
-              raise Ex.new(Request::RCODE_NXRRSET, "Prereq's class is zone's class, but RRset not match(len).")
+              raise NxRRSet.new("Prereq's class is zone's class, but RRset not match(len).")
             end
             prereq_rrset.length.times do |i|
               p = prereq_rrset[i]
               d = zone_rrset[i]
               # ttl は比較しない。
               unless p.rdata == d[:rdata]
-                raise Ex.new(Request::RCODE_NXRRSET, "Prereq's class is zone's class, but RRset not match(rdata).")
+                raise NxRRSet.new("Prereq's class is zone's class, but RRset not match(rdata).")
               end
             end
           end
@@ -905,7 +958,7 @@ def try_udp
 
         req.prerequisites.each do |prereq|
           if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
-            raise Ex.new(Request::RCODE_FORMERR, "Prereq's class is unknown.")
+            raise FormErr.new("Prereq's class is unknown.")
           end
         end
 
@@ -913,10 +966,10 @@ def try_udp
 
         req.updates.each do |update|
           unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
-            raise Ex.new(Request::RCODE_FORMERR, "Update's class is neigther zone's class, ANY, nor NONE.")
+            raise FormErr.new("Update's class is neigther zone's class, ANY, nor NONE.")
           end
           unless update.name.end_with?(req.zones[0].name)
-            raise Ex.new(Request::RCODE_NOTZONE, "Update's name doesn't match with zone's name.")
+            raise NotZone.new("Update's name doesn't match with zone's name.")
           end
         end
 
@@ -929,17 +982,17 @@ def try_udp
             when Request::TYPE_DHCID
             else
               Log.debug "type=#{update.type}"
-              raise Ex.new(Request::RCODE_FORMERR, "Update's class isn't ANY, but type is unknown.")
+              raise FormErr.new("Update's class isn't ANY, but type is unknown.")
             end
           end
           if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
             unless update.ttl == 0
-              raise Ex.new(Request::RCODE_FORMERR, "Update's class is ANY or NONE, but TTL isn't 0.")
+              raise FormErr.new("Update's class is ANY or NONE, but TTL isn't 0.")
             end
           end
           if update.class == Request::CLASS_ANY
             unless update.rdata.length == 0
-              raise Ex.new(Request::RCODE_FORMERR, "Update's class is ANY, but rdata isn't empty.")
+              raise FormErr.new("Update's class is ANY, but rdata isn't empty.")
             end
             case update.type
             when Request::TYPE_A
@@ -947,7 +1000,7 @@ def try_udp
             when Request::TYPE_PTR
             when Request::TYPE_DHCID
             else
-              raise Ex.new(Request::RCODE_FORMERR, "Update's class is ANY, but type is unknown.")
+              raise FormErr.new("Update's class is ANY, but type is unknown.")
             end
           end
         end
@@ -1019,35 +1072,9 @@ def try_udp
         Log.debug "OK."
 
       rescue => e
-        if e.is_a?(Ex)
-          Log.info e.to_s
-          case e.code
-          when Request::RCODE_NOERROR
-            Log.info "#{e.to_s} -> NOERROR"
-          when Request::RCODE_FORMERR
-            Log.err "#{e.to_s} -> FORMERR"
-          when Request::RCODE_SERVFAIL
-            Log.err "#{e.to_s} -> SERVFAIL"
-          when Request::RCODE_NXDOMAIN
-            Log.info "#{e.to_s} -> NXDOMAIN"
-          when Request::RCODE_NOTIMP
-            Log.err "#{e.to_s} -> NOTIMP"
-          when Request::RCODE_REFUSED
-            Log.err "#{e.to_s} -> REFUSED"
-          when Request::RCODE_YXDOMAIN
-            Log.info "#{e.to_s} -> YXDOMAIN"
-          when Request::RCODE_YXRRSET
-            Log.info "#{e.to_s} -> YXRRSET"
-          when Request::RCODE_NXRRSET
-            Log.info "#{e.to_s} -> NXRRSET"
-          when Request::RCODE_NOTAUTH
-            Log.err "#{e.to_s} -> NOTAUTH"
-          when Request::RCODE_NOTZONE
-            Log.err "#{e.to_s} -> NOTZONE"
-          else
-            Log.err "#{e.to_s} -> ??? (#{e.code})"
-          end
-          Log.debug e.backtrace.join("\n")
+        if e.is_a?(RCode)
+          Log.send(e.level, "#{e.to_s} -> #{e.class.to_s.upcase}")
+          Log.send(e.level, e.backtrace.join("\n"))
         else
           Log.err e.to_s
           Log.err e.backtrace.join("\n")
@@ -1055,7 +1082,7 @@ def try_udp
 
         res = [
           (req.id >> 8) & 0xff, req.id & 0xff,
-          0x80 | Request::OPCODE_UPDATE << 3, e.is_a?(Ex) ? e.code : Request::RCODE_SERVFAIL,
+          0x80 | Request::OPCODE_UPDATE << 3, e.is_a?(RCode) ? e.code : Request::RCODE_SERVFAIL,
           0, 0,
           0, 0,
           0, 0,
