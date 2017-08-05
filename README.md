@@ -10,12 +10,12 @@ dhcpd からの動的更新リクエストを受け取って nsd の zone file
 ## インストール
 
 1. `ddns-nsd.rb` をどこかに置いて下さい。
-2. `ddns-nsd.service` を `/etc/systemd/system/` にコピーしてください。
+2. `ddns-nsd.service`, `ddns-nsd.socket` を `/etc/systemd/system/` にコピーしてください。
 3. 以下の説明に従い、`/etc/nsd/ddns-nsd.yml` を作成してください。
 4. ここまで完了したら、ddns-nsd を起動してください。
    ```sh
-   systemctl enable ddns-nsd
-   systemctl start ddns-nsd
+   systemctl enable ddns-nsd.socket
+   systemctl start ddns-nsd.socket
    ```
 5. dhcpd も設定してください。ddns-update-style は standard です。
 

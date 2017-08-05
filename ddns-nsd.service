@@ -3,7 +3,3 @@ Description=DNS dynamic update service for nsd
 
 [Service]
 ExecStart=/home/masm/src/ddns-nsd/ddns-nsd.rb /etc/nsd/ddns-nsd.yml
-Restart=always
-
-[Install]
-WantedBy=multi-user.target

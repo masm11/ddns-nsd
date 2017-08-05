@@ -1,0 +1,9 @@
+[Unit]
+Description=ddns-nsd Activation Socket
+
+[Socket]
+ListenDatagram=127.0.0.2:53
+ListenDatagram=[::2]:53
+
+[Install]
+WantedBy=sockets.target

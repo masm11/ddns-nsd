@@ -782,8 +782,8 @@ def load_data(config)
   @json_filename = conf['json']
   raise 'No json in config.' unless @json_filename
   @listen = conf['listen']
-  raise 'No listen in config.' unless @listen
-  raise 'listen must be an array of a string.' unless @listen.is_a?(Array)
+  # raise 'No listen in config.' unless @listen
+  # raise 'listen must be an array of a string.' unless @listen.is_a?(Array)
   @keys = conf['keys']
   raise 'No keys in config.' unless @keys
   raise 'keys must be an array.' unless @keys.is_a?(Array)
@@ -836,18 +836,26 @@ def load_data(config)
 end
 
 def try_udp
-  socks = @listen.map{ |listen|
-    if listen =~ /\A([\d.]+):(\d+)\z/
-      sock = UDPSocket.new
-      sock.bind($1, $2.to_i)
-    elsif listen =~ /\A\[([0-9A-Fa-f:]+)\]:(\d+)\z/
-      sock = UDPSocket.new(Socket::AF_INET6)
-      sock.bind($1, $2.to_i)
-    else
-      raise "Bad listen: #{listen}" unless listen =~ /\A([^:]+):(\d+)\z/
-    end
-    sock
-  }
+  # https://80x24.org/misc/20151030-inherit-fds-w-o-sd_listen_fds-in-pure@ruby/
+  # see the sd_listen_fds(3) manpage for details
+  sd_pid, sd_fds = ENV.values_at('LISTEN_PID', 'LISTEN_FDS')
+  if sd_pid.to_i == $$ # n.b. $$ can never be zero
+    # 3 = SD_LISTEN_FDS_START
+    socks = (3...(3 + sd_fds.to_i)).map { |fd| Socket.for_fd(fd) }
+  elsif @listen
+    socks = @listen.map{ |listen|
+      if listen =~ /\A([\d.]+):(\d+)\z/
+        sock = UDPSocket.new
+        sock.bind($1, $2.to_i)
+      elsif listen =~ /\A\[([0-9A-Fa-f:]+)\]:(\d+)\z/
+        sock = UDPSocket.new(Socket::AF_INET6)
+        sock.bind($1, $2.to_i)
+      else
+        raise "Bad listen: #{listen}" unless listen =~ /\A([^:]+):(\d+)\z/
+      end
+      sock
+    }
+  end
   
   while true
     Log.debug "udp: recving..."
@@ -1085,7 +1093,7 @@ def try_udp
         ]
         res = sign_tsig(res, req, tsig)
         # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
-        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
+        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0] if sa.is_a?(Array)
         sock.send(res, 0, sa)
 
         Log.debug "OK."
@@ -1113,7 +1121,7 @@ def try_udp
           res = res.pack('C*')
         end
         # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
-        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0]
+        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0] if sa.is_a?(Array)
         sock.send(res, 0, sa)
       end
     end
