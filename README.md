@@ -2,7 +2,7 @@
 
 ## はじめに
 
-nsd を使っていますが、nsd は動的更新に対応していません。
+私は nsd を使っていますが、nsd は動的更新に対応していません。
 なので、zone file を直接いじっちゃえ、ってことで、
 dhcpd からの動的更新リクエストを受け取って nsd の zone file
 を更新して nsd を reload する script を書いてみました。
@@ -26,6 +26,7 @@ dhcpd からの動的更新リクエストを受け取って nsd の zone file
 json: /etc/nsd/ddns-nsd.json
 listen:
   - 127.0.0.2:53
+  - [::2]:53
 restart_nsd: "systemctl reload nsd"
 keys:
   - name: dhcp_updater.
@@ -41,7 +42,7 @@ zones:
 ```
 
 - json
-  内部状態を json 形式で保存します。ここにはそのためのファイル名を指定します。
+  内部状態を json 形式でファイルに保存しています。ここにはそのファイル名を指定します。
 
 - listen
   listen する IP アドレスと port を指定します。
@@ -68,7 +69,7 @@ zones:
 
 - 127.0.0.2:53 と [::2]:53 で ddns-nsd が待っている
 
-という状況にしました。
+という状態にしました。
 複数のアドレスで待ち受けできます。
 
 127.0.0.2 や ::2 を一時的に作るには、それぞれ、
@@ -133,7 +134,7 @@ ddns-nsd はこの行より下を書き換えていきます。ここから下�
 
 IPv4 と IPv6 で DHCID が異なっていると、片方が登録できてももう片方が登録できません。
 
-私は GNOME3 で NetworkManager + dhclient を使用しており、その設定例を挙げます。
+私は GNOME3 で NetworkManager + dhclient を使用しています。その場合の設定例を挙げます。
 
 ```sh
 nmcli con show <ネットワーク名>
@@ -172,6 +173,8 @@ nmcli con modify <ネットワーク名> <項目名> <値>
 ```sh
 nmcli con modify example-wifi ipv6.dhcp-hostname my.example.com
 ```
+
+macOS でどう設定すれば同じことができるかはまだ知りません。
 
 ## 対応状況
 
