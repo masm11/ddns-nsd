@@ -704,14 +704,14 @@ def update_zone_file(data)
       # Log.debug("line#{'%02d' % i}: + #{new_lines2[i]}")
       # Log.debug("line#{'%02d' % i}: code - #{lines2[i].unpack('C*')}")
       # Log.debug("line#{'%02d' % i}: code + #{new_lines2[i].unpack('C*')}")
-      if lines2[i] =~ /\A;/ && new_lines2[i] =~ /\A;/
-        # Log.debug('both are comments. ignored.')
-        # コメントが書き換わっただけで serial を増やすのは無駄。
-        # でもファイルとしては書き換わってる。
-        eq = false
-        next
-      end
       if lines2[i] != new_lines2[i]
+        if lines2[i] =~ /\A;/ && new_lines2[i] =~ /\A;/
+          # Log.debug('both are comments. ignored.')
+          # コメントが書き換わっただけで serial を増やすのは無駄。
+          # でもファイルとしては書き換わってる。
+          eq = false
+          next
+        end
         # Log.debug('differ.')
         eq = false
         need_reload = true
