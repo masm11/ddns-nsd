@@ -835,298 +835,252 @@ def load_data(config)
   save_data
 end
 
-def try_udp
-  # https://80x24.org/misc/20151030-inherit-fds-w-o-sd_listen_fds-in-pure@ruby/
-  # see the sd_listen_fds(3) manpage for details
-  sd_pid, sd_fds = ENV.values_at('LISTEN_PID', 'LISTEN_FDS')
-  if sd_pid.to_i == $$ # n.b. $$ can never be zero
-    # 3 = SD_LISTEN_FDS_START
-    socks = (3...(3 + sd_fds.to_i)).map { |fd| Socket.for_fd(fd) }
-  elsif @listen
-    socks = @listen.map{ |listen|
-      if listen =~ /\A([\d.]+):(\d+)\z/
-        sock = UDPSocket.new
-        sock.bind($1, $2.to_i)
-      elsif listen =~ /\A\[([0-9A-Fa-f:]+)\]:(\d+)\z/
-        sock = UDPSocket.new(Socket::AF_INET6)
-        sock.bind($1, $2.to_i)
-      else
-        raise "Bad listen: #{listen}" unless listen =~ /\A([^:]+):(\d+)\z/
+def process_packet(data)
+  
+  data = data.unpack('C*')   # ASCII-8BIT
+  
+  tsig = nil
+  
+  begin
+    now = Time.now.to_i
+    
+    req = Request.new(data)
+    
+    # check TSIG.
+    tsig = check_tsig(req, data)
+    
+    # check zone.
+    
+    if req.zones.length != 1
+      raise FormErr.new('Zone count is not 1.')
+    end
+    if req.zones[0].type != Request::TYPE_SOA
+      raise FormErr.new("Zone's type isn't SOA.")
+    end
+    data_alter = @data.dup
+    Log.info "zone: #{req.zones[0].name}"
+    data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
+    unless data
+      raise NotAuth.new("Zone's name is unknown: '#{dat[:name]}'")
+    end
+    
+    # check prerequisites.
+    
+    req.prerequisites.each do |prereq|
+      if prereq.class == Request::CLASS_ANY
+        unless prereq.ttl == 0
+          raise FormErr.new("Bad prereq: TTL != 0.")
+        end
+        unless prereq.rdata.length == 0
+          raise FormErr.new("Bad prereq: rdata not empty.")
+        end
+        
+        if prereq.type == Request::TYPE_ANY
+          unless data[:records].any?{ |rr| rr[:name] == prereq.name }
+            raise NxDomain.new("Prereq not satisfied: No such named RR exists: '#{prereq.name}'")
+          end
+        else
+          unless data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
+            raise NxRRSet.new("Prereq not satisfied: No such named and typed RR exists: '#{prereq.name}', #{prereq.type}")
+          end
+        end
       end
-      sock
-    }
+    end
+    
+    req.prerequisites.each do |prereq|
+      if prereq.class == Request::CLASS_NONE
+        unless prereq.ttl == 0
+          raise FormErr.new("Bad prereq: TTL != 0..")
+        end
+        unless prereq.rdata.length == 0
+          raise FormErr.new("Bad prereq: rdata not empty.")
+        end
+        
+        if prereq.type == Request::TYPE_ANY
+          if data[:records].any?{ |rr| rr[:name] == prereq.name }
+            raise YxDomain.new("Prereq not satisfied: Such a named RR exists: '#{prereq.name}'")
+          end
+        else
+          if data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
+            raise YxRRSet.new("Prereq not satisfied: Such a named and typed RR exists: '#{prereq.name}', #{prereq.type}")
+          end
+        end
+      end
+    end
+    
+    req.prerequisites.each do |prereq|
+      if prereq.class == req.zones[0].class
+        unless prereq.ttl == 0
+          raise FormErr.new("Bad prereq: TTL != 0.")
+        end
+        
+        prereq_rrset = req.prerequisites.select{ |p|
+          p.class == req.zones[0].class &&
+            p.name == prereq.name &&
+            p.type == prereq.type
+        }.sort{ |a, b|
+          a.rdata <=> b.rdata
+        }
+        zone_rrset = data[:records].select{ |d|
+          d[:name] == prereq.name && d[:type] == prereq.type
+        }.sort{ |a, b|
+          a.rdata <=> b.rdata
+        }
+        unless prereq_rrset.length == zone_rrset.length
+          raise NxRRSet.new("Prereq not satisfied: RRset not match.")
+        end
+        prereq_rrset.length.times do |i|
+          p = prereq_rrset[i]
+          d = zone_rrset[i]
+          # ttl は比較しない。
+          unless p.rdata == d[:rdata]
+            raise NxRRSet.new("Prereq not satisfied: RRset not match.")
+          end
+        end
+      end
+    end
+    
+    req.prerequisites.each do |prereq|
+      if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
+        raise FormErr.new("Bad prereq: class unknown.")
+      end
+    end
+    
+    # update
+    
+    req.updates.each do |update|
+      unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
+        raise FormErr.new("Bad update: class is neigther zone's class, ANY, nor NONE.")
+      end
+      unless update.name.end_with?(req.zones[0].name)
+        raise NotZone.new("Bad update: name not match with zone's name.")
+      end
+    end
+    
+    req.updates.each do |update|
+      if update.class != Request::CLASS_ANY
+        case update.type
+        when Request::TYPE_A
+        when Request::TYPE_AAAA
+        when Request::TYPE_PTR
+        when Request::TYPE_DHCID
+        else
+          raise FormErr.new("Bad update: unknown type: #{update.type}.")
+        end
+      end
+      if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
+        unless update.ttl == 0
+          raise FormErr.new("Bad update: TTL != 0.")
+        end
+      end
+      if update.class == Request::CLASS_ANY
+        unless update.rdata.length == 0
+          raise FormErr.new("Bad update: rdata not empty.")
+        end
+        case update.type
+        when Request::TYPE_A
+        when Request::TYPE_AAAA
+        when Request::TYPE_PTR
+        when Request::TYPE_DHCID
+        else
+          raise FormErr.new("Bad update: unknown type: #{update.type}")
+        end
+      end
+    end
+    
+    req.updates.each do |update|
+      if update.class == req.zones[0].class
+        replaced = false
+        data[:records].each do |rr|
+          if rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata
+            Log.info "Replace RR with: '#{update.name}', #{update.type}, #{update.ttl}, #{update.rdata}"
+            rr[:ttl] = update.ttl
+            rr[:timestamp] = now
+            replaced = true
+          end
+        end
+        unless replaced
+          Log.info "Add RR: '#{update.name}', #{update.type}, #{update.ttl}, #{update.rdata}"
+          rr = {
+            name: update.name,
+            type: update.type,
+            ttl: update.ttl,
+            rdata: update.rdata,
+            timestamp: now,
+          }
+          data[:records] << rr
+        end
+      end
+      if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
+        unless update.name == req.zones[0].name
+          Log.info "Delete name: '#{update.name}'"
+          data[:records] = data[:records].select{ |rr|
+            rr[:name] != update.name
+          }
+        end
+      end
+      if update.class == Request::CLASS_ANY && update.type != Request::TYPE_ANY
+        unless update.name == req.zones[0].name
+          Log.info "Delete RRset: '#{update.name}', #{update.type}"
+          data[:records] = data[:records].select{ |rr|
+            !(rr[:name] == update.name && rr[:type] == update.type)
+          }
+        end
+      end
+      if update.class == Request::CLASS_NONE
+        data[:records] = data[:records].select{ |rr|
+          Log.info "Delete RR: '#{update.name}', #{update.type}, #{update.rdata}"
+          !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata)
+        }
+      end
+    end
+    
+    # response
+    
+    @data = data_alter
+    Log.debug @data
+    
+    update_zone_files
+    save_data
+    
+    res = [
+      (req.id >> 8) & 0xff, req.id & 0xff,
+      0x80 | Request::OPCODE_UPDATE << 3, 0,
+      0, 0,
+      0, 0,
+      0, 0,
+      0, 0,
+    ]
+    res = sign_tsig(res, req, tsig)
+    # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
+    return res
+    Log.debug "OK."
+    
+  rescue => e
+    if e.is_a?(RCode)
+      Log.send(e.level, "#{e.to_s} -> #{e.class.to_s.upcase}")
+      Log.send(e.level, e.backtrace.join("\n"))
+    else
+      Log.err e.to_s
+      Log.err e.backtrace.join("\n")
+    end
+    
+    res = [
+      (req.id >> 8) & 0xff, req.id & 0xff,
+      0x80 | Request::OPCODE_UPDATE << 3, e.is_a?(RCode) ? e.code : Request::RCODE_SERVFAIL,
+      0, 0,
+      0, 0,
+      0, 0,
+      0, 0,
+    ]
+    if tsig
+      res = sign_tsig(res, req, tsig)
+    else
+      res = res.pack('C*')
+    end
+    return res
   end
   
-  while true
-    Log.debug "udp: recving..."
-    while true
-      # nsd を reload する必要があるなら、timeout を 1秒に設定。
-      # 1秒間に何も来ずに timeout すれば、reload する。
-      # 1秒の間に何か来たら、それを処理し、またその後 1秒待つ。
-      rs, ws = IO.select(socks, [], [], @need_reload ? 1 : nil)
-      break if rs
-
-      Log.info('reloading nsd.')
-      unless system(@restart_nsd)
-        Log.error "Failed to reload nsd."
-      else
-        @need_reload = false
-      end
-    end
-    
-    rs.each do |sock|
-      data, sa = sock.recvfrom(65536)
-      data = data.unpack('C*')   # ASCII-8BIT
-      Log.debug 'UDP:'
-
-      tsig = nil
-
-      begin
-        now = Time.now.to_i
-
-        req = Request.new(data)
-
-        # check TSIG.
-        tsig = check_tsig(req, data)
-
-        # check zone.
-
-        if req.zones.length != 1
-          raise FormErr.new('Zone count is not 1.')
-        end
-        if req.zones[0].type != Request::TYPE_SOA
-          raise FormErr.new("Zone's type isn't SOA.")
-        end
-        data_alter = @data.dup
-        Log.info "zone: #{req.zones[0].name}"
-        data = data_alter.select{ |dat| req.zones[0].name == dat[:name] }.first
-        unless data
-          raise NotAuth.new("Zone's name is unknown: '#{dat[:name]}'")
-        end
-
-        # check prerequisites.
-
-        req.prerequisites.each do |prereq|
-          if prereq.class == Request::CLASS_ANY
-            unless prereq.ttl == 0
-              raise FormErr.new("Bad prereq: TTL != 0.")
-            end
-            unless prereq.rdata.length == 0
-              raise FormErr.new("Bad prereq: rdata not empty.")
-            end
-            
-            if prereq.type == Request::TYPE_ANY
-              unless data[:records].any?{ |rr| rr[:name] == prereq.name }
-                raise NxDomain.new("Prereq not satisfied: No such named RR exists: '#{prereq.name}'")
-              end
-            else
-              unless data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
-                raise NxRRSet.new("Prereq not satisfied: No such named and typed RR exists: '#{prereq.name}', #{prereq.type}")
-              end
-            end
-          end
-        end
-        
-        req.prerequisites.each do |prereq|
-          if prereq.class == Request::CLASS_NONE
-            unless prereq.ttl == 0
-              raise FormErr.new("Bad prereq: TTL != 0..")
-            end
-            unless prereq.rdata.length == 0
-              raise FormErr.new("Bad prereq: rdata not empty.")
-            end
-            
-            if prereq.type == Request::TYPE_ANY
-              if data[:records].any?{ |rr| rr[:name] == prereq.name }
-                raise YxDomain.new("Prereq not satisfied: Such a named RR exists: '#{prereq.name}'")
-              end
-            else
-              if data[:records].any?{ |rr| rr[:name] == prereq.name && rr[:type] == prereq.type }
-                raise YxRRSet.new("Prereq not satisfied: Such a named and typed RR exists: '#{prereq.name}', #{prereq.type}")
-              end
-            end
-          end
-        end
-        
-        req.prerequisites.each do |prereq|
-          if prereq.class == req.zones[0].class
-            unless prereq.ttl == 0
-              raise FormErr.new("Bad prereq: TTL != 0.")
-            end
-            
-            prereq_rrset = req.prerequisites.select{ |p|
-              p.class == req.zones[0].class &&
-                p.name == prereq.name &&
-                p.type == prereq.type
-            }.sort{ |a, b|
-              a.rdata <=> b.rdata
-            }
-            zone_rrset = data[:records].select{ |d|
-              d[:name] == prereq.name && d[:type] == prereq.type
-            }.sort{ |a, b|
-              a.rdata <=> b.rdata
-            }
-            unless prereq_rrset.length == zone_rrset.length
-              raise NxRRSet.new("Prereq not satisfied: RRset not match.")
-            end
-            prereq_rrset.length.times do |i|
-              p = prereq_rrset[i]
-              d = zone_rrset[i]
-              # ttl は比較しない。
-              unless p.rdata == d[:rdata]
-                raise NxRRSet.new("Prereq not satisfied: RRset not match.")
-              end
-            end
-          end
-        end
-
-        req.prerequisites.each do |prereq|
-          if prereq.class != req.zones[0].class && prereq.class != Request::CLASS_NONE && prereq.class != Request::CLASS_ANY
-            raise FormErr.new("Bad prereq: class unknown.")
-          end
-        end
-
-        # update
-
-        req.updates.each do |update|
-          unless [ req.zones[0].class, Request::TYPE_ANY, Request::TYPE_NONE ].include?(update.class)
-            raise FormErr.new("Bad update: class is neigther zone's class, ANY, nor NONE.")
-          end
-          unless update.name.end_with?(req.zones[0].name)
-            raise NotZone.new("Bad update: name not match with zone's name.")
-          end
-        end
-
-        req.updates.each do |update|
-          if update.class != Request::CLASS_ANY
-            case update.type
-            when Request::TYPE_A
-            when Request::TYPE_AAAA
-            when Request::TYPE_PTR
-            when Request::TYPE_DHCID
-            else
-              raise FormErr.new("Bad update: unknown type: #{update.type}.")
-            end
-          end
-          if update.class == Request::CLASS_ANY || update.class == Request::CLASS_NONE
-            unless update.ttl == 0
-              raise FormErr.new("Bad update: TTL != 0.")
-            end
-          end
-          if update.class == Request::CLASS_ANY
-            unless update.rdata.length == 0
-              raise FormErr.new("Bad update: rdata not empty.")
-            end
-            case update.type
-            when Request::TYPE_A
-            when Request::TYPE_AAAA
-            when Request::TYPE_PTR
-            when Request::TYPE_DHCID
-            else
-              raise FormErr.new("Bad update: unknown type: #{update.type}")
-            end
-          end
-        end
-
-        req.updates.each do |update|
-          if update.class == req.zones[0].class
-            replaced = false
-            data[:records].each do |rr|
-              if rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata
-                Log.info "Replace RR with: '#{update.name}', #{update.type}, #{update.ttl}, #{update.rdata}"
-                rr[:ttl] = update.ttl
-                rr[:timestamp] = now
-                replaced = true
-              end
-            end
-            unless replaced
-              Log.info "Add RR: '#{update.name}', #{update.type}, #{update.ttl}, #{update.rdata}"
-              rr = {
-                name: update.name,
-                type: update.type,
-                ttl: update.ttl,
-                rdata: update.rdata,
-                timestamp: now,
-              }
-              data[:records] << rr
-            end
-          end
-          if update.class == Request::CLASS_ANY && update.type == Request::TYPE_ANY
-            unless update.name == req.zones[0].name
-              Log.info "Delete name: '#{update.name}'"
-              data[:records] = data[:records].select{ |rr|
-                rr[:name] != update.name
-              }
-            end
-          end
-          if update.class == Request::CLASS_ANY && update.type != Request::TYPE_ANY
-            unless update.name == req.zones[0].name
-              Log.info "Delete RRset: '#{update.name}', #{update.type}"
-              data[:records] = data[:records].select{ |rr|
-                !(rr[:name] == update.name && rr[:type] == update.type)
-              }
-            end
-          end
-          if update.class == Request::CLASS_NONE
-            data[:records] = data[:records].select{ |rr|
-              Log.info "Delete RR: '#{update.name}', #{update.type}, #{update.rdata}"
-              !(rr[:name] == update.name && rr[:type] == update.type && rr[:rdata] == update.rdata)
-            }
-          end
-        end
-
-        # response
-
-        @data = data_alter
-        Log.debug @data
-
-        update_zone_files
-        save_data
-
-        res = [
-          (req.id >> 8) & 0xff, req.id & 0xff,
-          0x80 | Request::OPCODE_UPDATE << 3, 0,
-          0, 0,
-          0, 0,
-          0, 0,
-          0, 0,
-        ]
-        res = sign_tsig(res, req, tsig)
-        # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
-        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0] if sa.is_a?(Array)
-        sock.send(res, 0, sa)
-
-        Log.debug "OK."
-
-      rescue => e
-        if e.is_a?(RCode)
-          Log.send(e.level, "#{e.to_s} -> #{e.class.to_s.upcase}")
-          Log.send(e.level, e.backtrace.join("\n"))
-        else
-          Log.err e.to_s
-          Log.err e.backtrace.join("\n")
-        end
-
-        res = [
-          (req.id >> 8) & 0xff, req.id & 0xff,
-          0x80 | Request::OPCODE_UPDATE << 3, e.is_a?(RCode) ? e.code : Request::RCODE_SERVFAIL,
-          0, 0,
-          0, 0,
-          0, 0,
-          0, 0,
-        ]
-        if tsig
-          res = sign_tsig(res, req, tsig)
-        else
-          res = res.pack('C*')
-        end
-        # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
-        sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0] if sa.is_a?(Array)
-        sock.send(res, 0, sa)
-      end
-    end
-    
-  end
 end
 
 raise 'Config file not specified.' unless ARGV[0]
@@ -1134,4 +1088,113 @@ raise 'Config file not specified.' unless ARGV[0]
 Log.info 'Starting ddns-nsd.'
 
 load_data(ARGV[0])
-try_udp
+
+# https://80x24.org/misc/20151030-inherit-fds-w-o-sd_listen_fds-in-pure@ruby/
+# see the sd_listen_fds(3) manpage for details
+sd_pid, sd_fds = ENV.values_at('LISTEN_PID', 'LISTEN_FDS')
+if sd_pid.to_i == $$ # n.b. $$ can never be zero
+  # 3 = SD_LISTEN_FDS_START
+  socks = []
+  (3...(3 + sd_fds.to_i)).each do |fd|
+    s = Socket.for_fd(fd)
+    la = s.local_address
+    case la.socktype
+    when Socket::SOCK_STREAM
+      socks << TCPServer.for_fd(fd)
+    when Socket::SOCK_DGRAM
+      socks << UDPSocket.for_fd(fd)
+    end
+  end
+elsif @listen
+  socks = []
+  @listen.each do |listen|
+    if listen =~ /\A([\d.]+):(\d+)\z/
+      sock = UDPSocket.new
+      sock.bind($1, $2.to_i)
+      socks << sock
+
+      sock = TCPServer.new($1, $2.to_i)
+      socks << sock
+    elsif listen =~ /\A\[([0-9A-Fa-f:]+)\]:(\d+)\z/
+      sock = UDPSocket.new(Socket::AF_INET6)
+      sock.bind($1, $2.to_i)
+      socks << sock
+
+      sock = TCPServer.new($1, $2.to_i)
+      socks << sock
+    else
+      raise "Bad listen: #{listen}" unless listen =~ /\A([^:]+):(\d+)\z/
+    end
+  end
+end
+
+def process_udp(sock)
+  data, sa = sock.recvfrom(65536)
+  res = process_packet data
+  # sa=[ AF_INET/INET6, port, hostname, host_ipaddr ]
+  sa = Addrinfo.getaddrinfo(sa[3], sa[1], sa[0], :DGRAM)[0] if sa.is_a?(Array)
+  sock.send(res, 0, sa)
+end
+
+def read_from_socket(sock, len)
+  buf = ''
+  while buf.length < len
+    b = sock.read(len - buf.length)
+    return nil if b == '' || b.nil?
+    buf += b
+  end
+  Log.debug("buf.lenth=#{buf.length}")
+  return buf
+end
+
+def process_tcp(sock)
+  while true
+    lendata = read_from_socket(sock, 2)
+    return if lendata.nil?
+    len = lendata.unpack('n')[0]
+    data = read_from_socket(sock, len)
+    return if data.nil?
+    res = process_packet data
+    sock.write([res.length].pack('n'))
+    sock.write(res)
+  end
+end
+
+while true
+  Log.debug "recving..."
+  while true
+    # nsd を reload する必要があるなら、timeout を 1秒に設定。
+    # 1秒間に何も来ずに timeout すれば、reload する。
+    # 1秒の間に何か来たら、それを処理し、またその後 1秒待つ。
+    rs, ws = IO.select(socks, [], [], @need_reload ? 1 : nil)
+    break if rs
+    
+    Log.info('reloading nsd.')
+    unless system(@restart_nsd)
+      Log.error "Failed to reload nsd."
+    else
+      @need_reload = false
+    end
+  end
+  
+  rs.each do |sock|
+    s = nil
+    begin
+      if sock.is_a?(UDPSocket)
+        process_udp sock
+      elsif sock.is_a?(TCPServer)
+        s = sock.accept
+        process_tcp s
+      else
+        raise "Unknown socket class: #{sock.class}"
+      end
+    rescue Exception => e
+      Log.err e.to_s
+      Log.err e.backtrace
+    ensure
+      if s
+        s.close
+      end
+    end
+  end
+end
